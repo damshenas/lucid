@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from .password import hash_password, verify_password
+from .password import PasswordTooLongError, hash_password, verify_password
 from .service import (
+    AccountLockedError,
     AuthError,
     AuthService,
     FirstRunError,
@@ -12,10 +13,12 @@ from .service import (
 from .tokens import TokenError, TokenService
 
 __all__ = [
+    "AccountLockedError",
     "AuthError",
     "AuthService",
     "FirstRunError",
     "InvalidCredentialsError",
+    "PasswordTooLongError",
     "TokenError",
     "TokenService",
     "hash_password",

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.modules.authentication import AuthError, AuthService
@@ -21,8 +21,8 @@ router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
 class CreateUserIn(BaseModel):
     username: str
-    password: str
-    role: str = Role.viewer.value
+    password: str = Field(min_length=8, max_length=72)
+    role: Role = Role.viewer
 
 
 @router.get("/users")
@@ -44,7 +44,9 @@ async def create_user(
     _: User = Depends(require_permission(Permission.manage_users)),
 ) -> dict[str, Any]:
     try:
-        user = await AuthService(session).create_user(body.username, body.password, body.role)
+        user = await AuthService(session).create_user(
+            body.username, body.password, body.role.value
+        )
         await session.commit()
     except AuthError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc

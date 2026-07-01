@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.modules.configs import (
     ConfigError,
+    ConfigPermissionError,
     ConfigService,
     flatten,
     is_secret_key,
@@ -47,19 +48,19 @@ async def test_resolution_order(session: AsyncSession) -> None:
     assert await svc.resolve(key, user_id=1, asset_class=ac) == 100.0
 
     # asset-class layer
-    await svc.set_value(key, 200.0, user_id=None, asset_class=ac)
+    await svc.set_value(key, 200.0, role="admin", user_id=None, asset_class=ac)
     assert await svc.resolve(key, user_id=1, asset_class=ac) == 200.0
 
     # global layer beats asset-class
-    await svc.set_value(key, 300.0, user_id=None, asset_class=None)
+    await svc.set_value(key, 300.0, role="admin", user_id=None, asset_class=None)
     assert await svc.resolve(key, user_id=1, asset_class=ac) == 300.0
 
     # per-user beats global
-    await svc.set_value(key, 400.0, user_id=1, asset_class=None)
+    await svc.set_value(key, 400.0, role="admin", user_id=1, asset_class=None)
     assert await svc.resolve(key, user_id=1, asset_class=ac) == 400.0
 
     # per-user + asset-class is most specific
-    await svc.set_value(key, 500.0, user_id=1, asset_class=ac)
+    await svc.set_value(key, 500.0, role="admin", user_id=1, asset_class=ac)
     assert await svc.resolve(key, user_id=1, asset_class=ac) == 500.0
 
     # a different user is unaffected -> sees global
@@ -69,7 +70,18 @@ async def test_resolution_order(session: AsyncSession) -> None:
 async def test_set_secret_rejected(session: AsyncSession) -> None:
     svc = ConfigService(session, _DEFAULTS)
     with pytest.raises(ConfigError):
-        await svc.set_value("trading212.api_key", "SECRET", user_id=1)
+        await svc.set_value("trading212.api_key", "SECRET", role="admin", user_id=1)
+
+
+async def test_set_value_requires_permission(session: AsyncSession) -> None:
+    svc = ConfigService(session, _DEFAULTS)
+    with pytest.raises(ConfigPermissionError):
+        await svc.set_value("execution.fixed_usd", 1.0, role="viewer", user_id=1)
+    with pytest.raises(ConfigPermissionError):
+        await svc.set_value("execution.fixed_usd", 1.0, role="trader", user_id=1)
+    # admin may write general sections; trader may write strategy.* for themselves.
+    await svc.set_value("execution.fixed_usd", 1.0, role="admin", user_id=1)
+    await svc.set_value("strategy.active_buy_strategy", "trend_follow", role="trader", user_id=1)
 
 
 async def test_compile_schema_from_model(session: AsyncSession) -> None:

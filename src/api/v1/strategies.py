@@ -62,7 +62,7 @@ async def activate_strategy(
     if service.get_loaded(name) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"strategy '{name}' not found")
     await ctx.config_service(session).set_value(
-        f"strategy.active_{direction}_strategy", name, user_id=user.id
+        f"strategy.active_{direction}_strategy", name, role=user.role, user_id=user.id
     )
     await session.commit()
     return {"active": name, "direction": direction}

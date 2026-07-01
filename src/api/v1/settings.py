@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.modules.configs import ConfigError
+from src.modules.configs import ConfigError, ConfigPermissionError
 from src.modules.db.models.user import User
 
 from ..deps import get_context, get_current_user, get_session
@@ -56,7 +56,11 @@ async def save_values(
     config = get_context(request).config_service(session)
     try:
         for key, value in body.values.items():
-            await config.set_value(key, value, user_id=user.id, asset_class=body.asset_class)
+            await config.set_value(
+                key, value, role=user.role, user_id=user.id, asset_class=body.asset_class
+            )
+    except ConfigPermissionError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
     except ConfigError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     await session.commit()

@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.modules.authentication import (
+    AccountLockedError,
     AuthService,
     FirstRunError,
     InvalidCredentialsError,
@@ -22,7 +23,7 @@ router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
 class SetupIn(BaseModel):
     username: str
-    password: str
+    password: str = Field(min_length=8, max_length=72)
 
 
 class LoginIn(BaseModel):
@@ -42,7 +43,7 @@ class RefreshIn(BaseModel):
 
 
 class ChangePasswordIn(BaseModel):
-    new_password: str
+    new_password: str = Field(min_length=8, max_length=72)
 
 
 def _issue_tokens(request: Request, user: User) -> TokenOut:
@@ -73,8 +74,15 @@ async def setup(request: Request, body: SetupIn, session: AsyncSession = Depends
 async def login(request: Request, body: LoginIn, session: AsyncSession = Depends(get_session)) -> TokenOut:
     try:
         user = await AuthService(session).authenticate(body.username, body.password)
+    except AccountLockedError as exc:
+        await session.commit()  # persist the lock state check itself causing no change
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, str(exc)) from exc
     except InvalidCredentialsError as exc:
+        # Commit even on failure: the failed-attempt counter/lockout set by
+        # authenticate() must persist, otherwise lockout never triggers.
+        await session.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from exc
+    await session.commit()
     return _issue_tokens(request, user)
 
 

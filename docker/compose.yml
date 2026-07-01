@@ -21,6 +21,9 @@ services:
       # Bind outbound traffic to the LAN/WAN-facing NIC (same pattern as
       # services/ddns/ddns.py's SO_BINDTODEVICE use of eno1).
       BIND_IFACE: eno1
+      # debug also surfaces h11's actual parse-error message for any
+      # "Invalid HTTP request received." warning (see src/modules/httpdebug).
+      LOG_LEVEL: debug
     ports:
       - "8686:8686"
     tmpfs:

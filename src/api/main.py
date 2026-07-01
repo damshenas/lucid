@@ -9,6 +9,7 @@ Run: ``uvicorn src.api.main:create_app --factory --no-access-log``.
 
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -43,7 +44,9 @@ _UI_DIST = Path("src/ui/dist")
 async def _lifespan(app: FastAPI):
     ctx: AppContext = getattr(app.state, "context", None) or AppContext.build()
     app.state.context = ctx
-    configure_logging(level=ctx.settings.logger.level, file_path=None)
+    # LOG_LEVEL is an ops-time override (e.g. set in compose.yml) and always wins over
+    # the DB/YAML-backed logger.level setting; it is intentionally not persisted.
+    configure_logging(level=os.environ.get("LOG_LEVEL", ctx.settings.logger.level), file_path=None)
 
     if ctx.is_sqlite:
         async with ctx.db.engine.begin() as conn:

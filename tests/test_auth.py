@@ -6,9 +6,11 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.modules.authentication import (
+    AccountLockedError,
     AuthService,
     FirstRunError,
     InvalidCredentialsError,
+    PasswordTooLongError,
     TokenError,
     TokenService,
     hash_password,
@@ -28,6 +30,11 @@ def test_password_hash_verify() -> None:
     assert h != "hunter2"
     assert verify_password("hunter2", h)
     assert not verify_password("wrong", h)
+
+
+def test_hash_password_over_72_bytes_raises() -> None:
+    with pytest.raises(PasswordTooLongError):
+        hash_password("x" * 100)
 
 
 def test_tokens_round_trip() -> None:
@@ -76,6 +83,32 @@ async def test_created_user_must_change_password(session: AsyncSession) -> None:
 
     updated = await svc.change_password(user, "newpw")
     assert updated.must_change_password is False
+
+
+async def test_login_lockout_after_max_failed_attempts(session: AsyncSession) -> None:
+    svc = AuthService(session)
+    await svc.bootstrap_first_admin("root", "pw")
+
+    for _ in range(5):
+        with pytest.raises(InvalidCredentialsError):
+            await svc.authenticate("root", "wrong")
+
+    # 5th failure trips the lock, so even the correct password is now rejected.
+    with pytest.raises(AccountLockedError):
+        await svc.authenticate("root", "pw")
+
+
+async def test_successful_login_resets_failed_attempts(session: AsyncSession) -> None:
+    svc = AuthService(session)
+    await svc.bootstrap_first_admin("root", "pw")
+
+    for _ in range(3):
+        with pytest.raises(InvalidCredentialsError):
+            await svc.authenticate("root", "wrong")
+
+    user = await svc.authenticate("root", "pw")
+    assert user.failed_login_attempts == 0
+    assert user.locked_until is None
 
 
 def test_rbac_matrix() -> None:

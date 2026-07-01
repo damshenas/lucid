@@ -1,10 +1,11 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 
 // Builds to src/ui/dist, which FastAPI serves at "/". During dev, API calls are
 // proxied to the backend on port 8686.
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   build: { outDir: "dist", emptyOutDir: true },
   server: {
     proxy: {

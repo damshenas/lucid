@@ -22,6 +22,9 @@ from src.modules.com.trading212 import Trading212Broker, Trading212Client
 from src.modules.configs import ConfigService, load_default_config
 from src.modules.db.connection import Database
 from src.modules.encryption import (
+    ENV_VAR as ENCRYPTION_KEY_ENV_VAR,
+)
+from src.modules.encryption import (
     CredentialManager,
     CredentialNotConfiguredError,
     Encryptor,
@@ -115,13 +118,17 @@ class AppContext:
             _logger.warning("LUCID_JWT_SECRET not set — using an ephemeral dev secret")
             jwt_secret = generate_key()
 
-        try:
-            encryptor = Encryptor(load_key_from_env())
-        except Exception:
-            _logger.warning("LUCID_ENCRYPTION_KEY not set/invalid — using an ephemeral dev key")
+        if not os.environ.get(ENCRYPTION_KEY_ENV_VAR):
+            _logger.warning("LUCID_ENCRYPTION_KEY not set — using an ephemeral dev key")
             import base64
 
             encryptor = Encryptor(base64.b64decode(generate_key()))
+        else:
+            # Set but invalid (bad base64, wrong length) must fail startup rather than
+            # silently falling back to a random key — that would make previously
+            # encrypted credentials permanently undecryptable and, with multiple
+            # replicas, each instance would mint a different key.
+            encryptor = Encryptor(load_key_from_env())
 
         config_defaults = load_default_config(config_path)
         settings = LucidConfig.model_validate(config_defaults)

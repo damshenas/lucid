@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { Lock, User } from "lucide-react";
+import { Button } from "../components/ui/Button";
 
 interface Props {
   initialized: boolean | null;
@@ -10,40 +12,76 @@ export function Login({ initialized, onLogin, onSetup }: Props) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const isSetup = initialized === false;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setBusy(true);
     try {
       if (isSetup) await onSetup(username, password);
       else await onLogin(username, password);
     } catch (err) {
       setError((err as Error).message);
+    } finally {
+      setBusy(false);
     }
   }
 
   return (
-    <div style={{ maxWidth: 320, margin: "10vh auto", fontFamily: "system-ui" }}>
-      <h1>Lucid</h1>
-      <h3>{isSetup ? "Create first admin" : "Sign in"}</h3>
-      <form onSubmit={submit}>
-        <input
-          placeholder="username"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          style={{ display: "block", width: "100%", marginBottom: 8 }}
-        />
-        <input
-          type="password"
-          placeholder="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          style={{ display: "block", width: "100%", marginBottom: 8 }}
-        />
-        <button type="submit">{isSetup ? "Create" : "Login"}</button>
-      </form>
-      {error && <p style={{ color: "crimson" }}>{error}</p>}
+    <div className="flex min-h-screen items-center justify-center px-4">
+      <div className="glass w-full max-w-sm animate-fade-in-up rounded-3xl p-8">
+        <div className="mb-1 flex items-center gap-2">
+          <span className="h-2.5 w-2.5 rounded-full bg-gradient-to-r from-violet to-cyan" />
+          <h1 className="bg-gradient-to-r from-violet via-white to-cyan bg-clip-text text-2xl font-bold text-transparent">
+            Lucid
+          </h1>
+        </div>
+        <p className="mb-6 text-sm text-white/50">
+          {isSetup ? "Create the first admin account" : "Sign in to continue"}
+        </p>
+
+        <form onSubmit={submit} className="space-y-3">
+          <label className="block">
+            <span className="sr-only">Username</span>
+            <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-3.5 py-2.5 transition-colors focus-within:border-violet/50 focus-within:glow-violet">
+              <User size={16} className="text-white/40" />
+              <input
+                placeholder="Username"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                autoComplete="username"
+                className="w-full bg-transparent text-sm text-white placeholder:text-white/30 outline-none"
+              />
+            </div>
+          </label>
+          <label className="block">
+            <span className="sr-only">Password</span>
+            <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-3.5 py-2.5 transition-colors focus-within:border-violet/50 focus-within:glow-violet">
+              <Lock size={16} className="text-white/40" />
+              <input
+                type="password"
+                placeholder="Password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete={isSetup ? "new-password" : "current-password"}
+                className="w-full bg-transparent text-sm text-white placeholder:text-white/30 outline-none"
+              />
+            </div>
+          </label>
+
+          {error && (
+            <p className="rounded-xl border border-rose/30 bg-rose/10 px-3 py-2 text-sm text-rose">
+              {error}
+            </p>
+          )}
+
+          <Button type="submit" disabled={busy} className="w-full">
+            {busy ? "Please wait…" : isSetup ? "Create account" : "Sign in"}
+          </Button>
+        </form>
+      </div>
     </div>
   );
 }

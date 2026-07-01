@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from sqlalchemy import Boolean, String
+from datetime import datetime
+
+from sqlalchemy import Boolean, DateTime, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import Base, Role, TimestampMixin
@@ -18,3 +20,5 @@ class User(Base, TimestampMixin):
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     use_default_credentials: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    failed_login_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -80,3 +80,46 @@ def test_save_secret_rejected(client: TestClient) -> None:
         json={"values": {"trading212.api_key": "SECRET"}},
     )
     assert resp.status_code == 400
+
+
+def test_settings_write_requires_permission(client: TestClient) -> None:
+    admin_token = client.post(
+        "/api/v1/auth/setup", json={"username": "root", "password": "pw"}
+    ).json()["access_token"]
+
+    created = client.post(
+        "/api/v1/admin/users",
+        headers=_auth(admin_token),
+        json={"username": "view1", "password": "viewerpw"},
+    )
+    assert created.status_code == 201
+
+    viewer_token = client.post(
+        "/api/v1/auth/login", json={"username": "view1", "password": "viewerpw"}
+    ).json()["access_token"]
+
+    resp = client.post(
+        "/api/v1/settings",
+        headers=_auth(viewer_token),
+        json={"values": {"execution.fixed_usd": 50.0}},
+    )
+    assert resp.status_code == 403
+
+    admin_resp = client.post(
+        "/api/v1/settings",
+        headers=_auth(admin_token),
+        json={"values": {"execution.fixed_usd": 50.0}},
+    )
+    assert admin_resp.status_code == 200
+
+
+def test_create_user_invalid_role_rejected(client: TestClient) -> None:
+    admin_token = client.post(
+        "/api/v1/auth/setup", json={"username": "root", "password": "pw"}
+    ).json()["access_token"]
+    resp = client.post(
+        "/api/v1/admin/users",
+        headers=_auth(admin_token),
+        json={"username": "bob", "password": "somepassword", "role": "superadmin"},
+    )
+    assert resp.status_code == 422

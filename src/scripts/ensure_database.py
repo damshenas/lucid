@@ -15,28 +15,39 @@ import os
 import re
 import sys
 
-_URL_RE = re.compile(
-    r"^postgresql\+asyncpg://(?P<user>[^:]+):(?P<password>[^@]+)@"
-    r"(?P<host>[^:/]+):(?P<port>\d+)/(?P<dbname>.+)$"
-)
+from sqlalchemy.engine import make_url
+
+# Postgres identifiers are limited to 63 bytes; restrict to a conservative safe
+# subset so the name can never break out of the double-quoted identifier below.
+_SAFE_DBNAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
 
 
 async def ensure_database(database_url: str) -> None:
-    match = _URL_RE.match(database_url)
-    if not match:
+    try:
+        url = make_url(database_url)
+    except Exception as exc:  # noqa: BLE001 - malformed URL is a skip, not a crash
+        print(f"[ensure_database] could not parse DATABASE_URL, skipping: {exc}")
+        return
+
+    if url.get_backend_name() != "postgresql":
         print("[ensure_database] DATABASE_URL is not postgresql+asyncpg://..., skipping.")
+        return
+
+    dbname = url.database or ""
+    if not _SAFE_DBNAME_RE.match(dbname):
+        print(
+            f"[ensure_database] database name {dbname!r} failed safety validation, skipping."
+        )
         return
 
     import asyncpg
 
-    user = match.group("user")
-    password = match.group("password")
-    host = match.group("host")
-    port = int(match.group("port"))
-    dbname = match.group("dbname")
-
     conn = await asyncpg.connect(
-        user=user, password=password, host=host, port=port, database="postgres"
+        user=url.username,
+        password=url.password,
+        host=url.host,
+        port=url.port or 5432,
+        database="postgres",
     )
     try:
         exists = await conn.fetchval("SELECT 1 FROM pg_database WHERE datname = $1", dbname)

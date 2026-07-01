@@ -25,6 +25,7 @@ from pydantic import BaseModel
 from pydantic_core import PydanticUndefined
 
 from src.conf.schema import LucidConfig
+from src.modules.authorization import Permission, has_permission
 from src.modules.db.repositories.config import ConfigRepository
 
 if TYPE_CHECKING:
@@ -35,9 +36,27 @@ SECRET_WORDS = ("key", "token", "secret", "password")
 
 _MISSING = object()
 
+# Per-section permission required to write a config key, keyed by the section name
+# (the part of the dotted key before the first "."). Sections not listed here fall
+# back to _DEFAULT_SECTION_PERMISSION. Per plan.md's RBAC table, only "trader"s may
+# edit their own strategy config; everything else is an admin-only "system default".
+_SECTION_PERMISSIONS: dict[str, Permission] = {
+    "strategy": Permission.edit_own_strategies,
+}
+_DEFAULT_SECTION_PERMISSION = Permission.edit_system_settings
+
 
 class ConfigError(Exception):
     """Raised for invalid config operations (e.g. secrets in YAML)."""
+
+
+class ConfigPermissionError(ConfigError):
+    """Raised when a role lacks permission to write a given config key."""
+
+
+def required_permission_for_key(key: str) -> Permission:
+    section = key.split(".", 1)[0]
+    return _SECTION_PERMISSIONS.get(section, _DEFAULT_SECTION_PERMISSION)
 
 
 def is_secret_key(key: str) -> bool:
@@ -207,11 +226,15 @@ class ConfigService:
         key: str,
         value: Any,
         *,
+        role: str,
         user_id: int | None = None,
         asset_class: str | None = None,
     ) -> None:
         if is_secret_key(key):
             raise ConfigError(f"'{key}' is a secret; use the credential store, not config")
+        permission = required_permission_for_key(key)
+        if not has_permission(role, permission):
+            raise ConfigPermissionError(f"role '{role}' lacks permission to set '{key}'")
         await self._repo.upsert_scoped(key, value, user_id=user_id, asset_class=asset_class)
 
     async def compile_schema(
@@ -246,11 +269,13 @@ class ConfigService:
 
 __all__ = [
     "ConfigError",
+    "ConfigPermissionError",
     "ConfigService",
     "SchemaSection",
     "flatten",
     "is_secret_key",
     "load_default_config",
     "module_sections",
+    "required_permission_for_key",
     "unflatten",
 ]
