@@ -1,5 +1,11 @@
 services:
   lucid:
+    container_name: lucid
+    restart: on-failure:3
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - "no-new-privileges:true"
     build:
       context: ..
       dockerfile: docker/Dockerfile
@@ -17,17 +23,9 @@ services:
       BIND_IFACE: eno1
     ports:
       - "8686:8686"
-    read_only: true
-    cap_drop:
-      - ALL
-    security_opt:
-      - "no-new-privileges:true"
     tmpfs:
       - /tmp
       - /run
     volumes:
-      - lucid_data:/data
-      - ../strategies:/strategies
-
-volumes:
-  lucid_data:
+      - /container/lucid/data:/data:rw,z
+      - /container/lucid/algorithms:/algorithms:rw,z
