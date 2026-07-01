@@ -5,7 +5,16 @@
 FROM node:20-alpine AS ui
 WORKDIR /ui
 COPY src/ui/package.json ./
-RUN npm install
+
+# Only resolve dependency versions published at least 14 days ago (same freshness
+# floor as the Python deps below), to reduce exposure to newly-published or
+# newly-compromised package releases. Computed via node (not `date -d`, which
+# busybox/alpine's date does not support) for portability across base images.
+# Always follow up with `npm audit fix` so known-vulnerable resolved versions
+# get patched even if that means going past the 14-day floor.
+RUN NPM_BEFORE="$(node -e 'console.log(new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString())')" && \
+    npm install --before "$NPM_BEFORE" && \
+    npm audit fix
 COPY src/ui/ ./
 RUN npm run build
 
