@@ -2,6 +2,7 @@
 set -euo pipefail
 
 COMPOSE_FILE="${COMPOSE_FILE:-docker/compose.yml}"
+SE_FILE="${SE_FILE:-/container/.sec}"
 ACTION="${1:-}"
 
 usage() {
@@ -20,6 +21,15 @@ usage() {
 
 if [[ -z "$ACTION" ]]; then
     usage
+fi
+
+if [[ -f "$SE_FILE" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$SE_FILE"
+    set +a
+else
+    echo "Warning: se file '$SE_FILE' not found; required \${VAR} substitutions may fail." >&2
 fi
 
 # Use podman-compose with the selected compose file and action

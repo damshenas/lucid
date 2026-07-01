@@ -1,33 +1,20 @@
 services:
-  db:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: lucid
-      POSTGRES_PASSWORD: lucid
-      POSTGRES_DB: lucid
-    volumes:
-      - lucid_pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U lucid"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
   lucid:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    depends_on:
-      db:
-        condition: service_healthy
     environment:
-      DATABASE_URL: postgresql+asyncpg://lucid:lucid@db:5432/lucid
-      LUCID_ENCRYPTION_KEY: ${LUCID_ENCRYPTION_KEY:?set a base64 32-byte key}
-      LUCID_JWT_SECRET: ${LUCID_JWT_SECRET:?set a random secret}
+      # Reuses the shared postgres from stacks/production/databases.yml (port
+      # 5432 is published on the host, so host.containers.internal reaches it
+      # the same way stacks/production/photos.yml's immich service does).
+      # One-time setup on that postgres: `CREATE DATABASE lucid OWNER app;`
+      DATABASE_URL: postgresql+asyncpg://app:${PSPW}@host.containers.internal:5432/lucid
+      LUCID_ENCRYPTION_KEY: ${LCEK}
+      LUCID_JWT_SECRET: ${LJWS}
       STRATEGIES_ROOT: /strategies
-      # Optional outbound NIC binding:
-      # BIND_IFACE: eth0
-      # BIND_IP: 192.168.1.10
+      # Bind outbound traffic to the LAN/WAN-facing NIC (same pattern as
+      # services/ddns/ddns.py's SO_BINDTODEVICE use of eno1).
+      BIND_IFACE: eno1
     ports:
       - "8686:8686"
     read_only: true
@@ -43,5 +30,4 @@ services:
       - ../strategies:/strategies
 
 volumes:
-  lucid_pgdata:
   lucid_data:
