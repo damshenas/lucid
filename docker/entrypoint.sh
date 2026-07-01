@@ -3,6 +3,9 @@
 # lifespan at startup. Access logging is disabled inside the launcher.
 set -e
 
+echo "[entrypoint] checking target database exists..."
+python -m src.scripts.ensure_database
+
 echo "[entrypoint] applying database migrations..."
 alembic upgrade head
 
