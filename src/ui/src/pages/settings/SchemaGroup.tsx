@@ -8,10 +8,11 @@ interface FieldProps {
   fieldKey: string;
   meta: SchemaField;
   current: unknown;
+  readOnly: boolean;
   onChange: (key: string, raw: string, type: string) => void;
 }
 
-function Field({ fieldKey, meta, current, onChange }: FieldProps) {
+function Field({ fieldKey, meta, current, readOnly, onChange }: FieldProps) {
   const label = humanize(fieldKey.split(".").pop() ?? fieldKey);
   if (meta.type === "bool") {
     return (
@@ -20,6 +21,7 @@ function Field({ fieldKey, meta, current, onChange }: FieldProps) {
         <Toggle
           checked={Boolean(current)}
           onChange={(checked) => onChange(fieldKey, String(checked), "bool")}
+          disabled={readOnly}
           label={label}
         />
       </div>
@@ -32,7 +34,8 @@ function Field({ fieldKey, meta, current, onChange }: FieldProps) {
         defaultValue={String(current ?? "")}
         type={meta.type === "int" || meta.type === "float" ? "number" : "text"}
         onChange={(e) => onChange(fieldKey, e.target.value, meta.type)}
-        className="w-full rounded-xl border border-white/10 bg-white/5 px-3.5 py-2 text-sm text-white outline-none transition-colors focus:border-violet/50 focus:glow-violet"
+        disabled={readOnly}
+        className="w-full rounded-xl border border-white/10 bg-white/5 px-3.5 py-2 text-sm text-white outline-none transition-colors focus:border-violet/50 focus:glow-violet disabled:cursor-not-allowed disabled:opacity-50"
       />
     </label>
   );
@@ -42,11 +45,15 @@ interface Props {
   node: GroupNode;
   edited: Record<string, unknown>;
   onChange: (key: string, raw: string, type: string) => void;
+  /** True when the current user lacks write permission for this section — fields are
+   * still shown (parity with the pre-restructure page, which showed everything to
+   * everyone) but disabled instead of hidden. */
+  readOnly?: boolean;
 }
 
 /** Renders one schema tree node: its own fields as a form, plus any nested groups as
  * nested tabs (recursively) — fully generic, driven by whatever the backend reports. */
-export function SchemaGroup({ node, edited, onChange }: Props) {
+export function SchemaGroup({ node, edited, onChange, readOnly = false }: Props) {
   const groupEntries = Object.entries(node.groups);
 
   return (
@@ -60,6 +67,7 @@ export function SchemaGroup({ node, edited, onChange }: Props) {
                 fieldKey={key}
                 meta={field}
                 current={key in edited ? edited[key] : field.value}
+                readOnly={readOnly}
                 onChange={onChange}
               />
             ))}
@@ -72,7 +80,9 @@ export function SchemaGroup({ node, edited, onChange }: Props) {
           tabs={groupEntries.map(([name, sub]) => ({
             id: name,
             label: humanize(name),
-            content: <SchemaGroup node={sub} edited={edited} onChange={onChange} />,
+            content: (
+              <SchemaGroup node={sub} edited={edited} onChange={onChange} readOnly={readOnly} />
+            ),
           }))}
         />
       )}
@@ -82,3 +92,4 @@ export function SchemaGroup({ node, edited, onChange }: Props) {
     </div>
   );
 }
+

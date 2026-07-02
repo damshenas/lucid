@@ -10,7 +10,7 @@ export interface GroupNode {
   groups: Record<string, GroupNode>;
 }
 
-function emptyGroup(): GroupNode {
+export function emptyGroup(): GroupNode {
   return { fields: [], groups: {} };
 }
 
@@ -48,6 +48,21 @@ export function buildSchemaTree(schema: SettingsSchema): Record<string, GroupNod
 
   return roots;
 }
+
+/**
+ * Canonical top-level section order (mirrors LucidConfig in src/conf/schema.py).
+ * Fixed so the tab bar doesn't reshuffle/flicker while the schema is still loading —
+ * each tab just shows a loading placeholder until its section arrives.
+ */
+export const SETTINGS_SECTION_ORDER = [
+  "execution",
+  "strategy",
+  "schedule",
+  "git_sync",
+  "price",
+  "broker",
+  "logger",
+];
 
 export function humanize(name: string): string {
   return name

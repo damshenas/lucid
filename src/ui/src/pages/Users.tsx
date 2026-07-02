@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
+import { Select } from "../components/ui/Select";
 import type { AdminUser } from "../types";
 
 const ROLES = ["viewer", "trader", "admin"];
@@ -101,17 +102,13 @@ export function Users() {
           </label>
           <label className="block">
             <span className="mb-1 block text-xs text-white/40">Role</span>
-            <select
-              value={role}
-              onChange={(e) => setRole(e.target.value)}
-              className="rounded-xl border border-white/10 bg-white/5 px-3.5 py-2 text-sm text-white outline-none transition-colors focus:border-violet/50 focus:glow-violet"
-            >
+            <Select value={role} onChange={(e) => setRole(e.target.value)} className="w-32">
               {ROLES.map((r) => (
                 <option key={r} value={r} className="bg-surface">
                   {r}
                 </option>
               ))}
-            </select>
+            </Select>
           </label>
           <Button type="submit" disabled={creating}>
             <UserPlus size={16} />

@@ -4,11 +4,12 @@ import { Button } from "../components/ui/Button";
 import { Tabs, type TabDef } from "../components/ui/Tabs";
 import { useAuth } from "../hooks/useAuth";
 import { hasPermission } from "../lib/permissions";
+import type { Permission } from "../lib/permissions";
 import type { SettingsSchema } from "../types";
 import { AccountTab } from "./settings/AccountTab";
 import { MyCredentialsTab } from "./settings/MyCredentialsTab";
 import { SchemaGroup } from "./settings/SchemaGroup";
-import { buildSchemaTree, humanize } from "./settings/schemaTree";
+import { SETTINGS_SECTION_ORDER, buildSchemaTree, emptyGroup, humanize } from "./settings/schemaTree";
 import { SystemCredentialsTab } from "./settings/SystemCredentialsTab";
 
 interface Status {
@@ -16,8 +17,17 @@ interface Status {
   tone: "success" | "error";
 }
 
-// The "System" and "Strategy" tabs are fully schema-driven from GET /settings/schema —
-// no hardcoded fields, no hardcoded nesting. See pages/settings/schemaTree.ts.
+// Mirrors required_permission_for_key() in src/modules/configs/__init__.py: only the
+// "strategy" section is trader-editable, everything else is an admin-only "system
+// default". Used to disable (not hide) sections the current role can't write to.
+function sectionPermission(name: string): Permission {
+  return name === "strategy" ? "edit_own_strategies" : "edit_system_settings";
+}
+
+// Every schema section is fetched and shown to every authenticated user — the backend
+// GET /settings/schema endpoint itself has no permission gate, and hiding sections a
+// role merely can't edit is confusing ("where did my settings go?"). Sections the role
+// can't write to are rendered read-only instead of hidden.
 export function Settings() {
   const { role } = useAuth();
   const canSystem = hasPermission(role, "edit_system_settings");
@@ -30,12 +40,11 @@ export function Settings() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (!canSystem && !canStrategy) return;
     api
       .settingsSchema()
       .then(setSchema)
       .catch((e) => setStatus({ text: (e as Error).message, tone: "error" }));
-  }, [canSystem, canStrategy]);
+  }, []);
 
   useEffect(() => {
     if (!status) return;
@@ -44,6 +53,7 @@ export function Settings() {
   }, [status]);
 
   const tree = useMemo(() => buildSchemaTree(schema), [schema]);
+  const schemaLoaded = Object.keys(schema).length > 0;
 
   function onFieldChange(key: string, raw: string, type: string) {
     let value: unknown = raw;
@@ -66,45 +76,30 @@ export function Settings() {
     }
   }
 
-  const tabs: TabDef[] = [];
+  // Fixed tab list — order and presence never change across renders (aside from the
+  // role-gated Credentials tabs, which depend only on `role`, resolved synchronously
+  // at mount), so the tab bar never reshuffles or flickers while the schema loads.
+  const tabs: TabDef[] = SETTINGS_SECTION_ORDER.map((name) => ({
+    id: name,
+    label: humanize(name),
+    content: schemaLoaded ? (
+      <SchemaGroup
+        node={tree[name] ?? emptyGroup()}
+        edited={edited}
+        onChange={onFieldChange}
+        readOnly={!hasPermission(role, sectionPermission(name))}
+      />
+    ) : (
+      <p className="py-6 text-center text-sm text-white/40">Loading…</p>
+    ),
+  }));
 
   if (canSystem) {
-    const systemRoots = Object.keys(tree).filter((name) => name !== "strategy");
-    tabs.push({
-      id: "system",
-      label: "System",
-      content: (
-        <Tabs
-          level="nested"
-          tabs={[
-            ...systemRoots.map((name) => ({
-              id: name,
-              label: humanize(name),
-              content: <SchemaGroup node={tree[name]} edited={edited} onChange={onFieldChange} />,
-            })),
-            { id: "credentials", label: "Credentials", content: <SystemCredentialsTab /> },
-          ]}
-        />
-      ),
-    });
+    tabs.push({ id: "credentials", label: "Credentials", content: <SystemCredentialsTab /> });
   }
-
-  if (canStrategy) {
-    tabs.push({
-      id: "strategy",
-      label: "Strategy",
-      content: tree.strategy ? (
-        <SchemaGroup node={tree.strategy} edited={edited} onChange={onFieldChange} />
-      ) : (
-        <p className="py-6 text-center text-sm text-white/40">Loading…</p>
-      ),
-    });
-  }
-
   if (canCredentials) {
     tabs.push({ id: "my-credentials", label: "My Credentials", content: <MyCredentialsTab /> });
   }
-
   tabs.push({ id: "account", label: "Account", content: <AccountTab /> });
 
   return (

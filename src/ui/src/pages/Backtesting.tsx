@@ -3,6 +3,7 @@ import { FlaskConical } from "lucide-react";
 import { api } from "../api/client";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
+import { Select } from "../components/ui/Select";
 import type { BacktestResult, Strategy } from "../types";
 
 const INTERVALS = ["1d", "15m"];
@@ -56,25 +57,17 @@ export function Backtesting() {
           </label>
           <label className="block">
             <span className="mb-1 block text-xs text-white/40">Interval</span>
-            <select
-              value={interval}
-              onChange={(e) => setInterval_(e.target.value)}
-              className="rounded-xl border border-white/10 bg-white/5 px-3.5 py-2 text-sm text-white outline-none transition-colors focus:border-violet/50 focus:glow-violet"
-            >
+            <Select value={interval} onChange={(e) => setInterval_(e.target.value)} className="w-28">
               {INTERVALS.map((i) => (
                 <option key={i} value={i} className="bg-surface">
                   {i}
                 </option>
               ))}
-            </select>
+            </Select>
           </label>
           <label className="block">
             <span className="mb-1 block text-xs text-white/40">Strategy</span>
-            <select
-              value={strategy}
-              onChange={(e) => setStrategy(e.target.value)}
-              className="rounded-xl border border-white/10 bg-white/5 px-3.5 py-2 text-sm text-white outline-none transition-colors focus:border-violet/50 focus:glow-violet"
-            >
+            <Select value={strategy} onChange={(e) => setStrategy(e.target.value)} className="w-40">
               <option value="" className="bg-surface">
                 Active strategy
               </option>
@@ -83,7 +76,7 @@ export function Backtesting() {
                   {s.name}
                 </option>
               ))}
-            </select>
+            </Select>
           </label>
           <Button onClick={run} disabled={running || !ticker.trim()}>
             <FlaskConical size={16} />
