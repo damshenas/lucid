@@ -3,9 +3,9 @@ import { AppLayout } from "./components/AppLayout";
 import { RequirePermission } from "./components/RequirePermission";
 import { useAuth } from "./hooks/useAuth";
 import { defaultPathFor } from "./lib/nav";
-import { Admin } from "./pages/Admin";
 import { Backtesting } from "./pages/Backtesting";
 import { Dashboard } from "./pages/Dashboard";
+import { Jobs } from "./pages/Jobs";
 import { Login } from "./pages/Login";
 import { Orders } from "./pages/Orders";
 import { Positions } from "./pages/Positions";
@@ -13,6 +13,7 @@ import { Prices } from "./pages/Prices";
 import { Settings } from "./pages/Settings";
 import { Signals } from "./pages/Signals";
 import { Strategies } from "./pages/Strategies";
+import { Users } from "./pages/Users";
 
 export function App() {
   const { token, role, initialized, login, setup, logout } = useAuth();
@@ -82,10 +83,18 @@ export function App() {
         />
         <Route path="settings" element={<Settings />} />
         <Route
-          path="admin"
+          path="jobs"
           element={
             <RequirePermission role={role} permission="manage_users">
-              <Admin />
+              <Jobs />
+            </RequirePermission>
+          }
+        />
+        <Route
+          path="users"
+          element={
+            <RequirePermission role={role} permission="manage_users">
+              <Users />
             </RequirePermission>
           }
         />

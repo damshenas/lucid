@@ -16,7 +16,6 @@ def test_all_tables_registered() -> None:
         "orders",
         "signals",
         "signal_outcomes",
-        "daily_losses",
         "app_logs",
         "strategy_registry",
         "user_config",

@@ -43,6 +43,11 @@ RUN apt-get update \
 COPY pyproject.toml README.md ./
 COPY src ./src
 COPY strategies ./strategies
+# Second, immutable copy at a path the runtime never bind-mounts over. STRATEGIES_ROOT
+# (./strategies) is mounted read-write in production so the git-sync deploy step
+# (src/scripts/sync_algorithms.py) can write into it; a fresh/empty mount would
+# otherwise hide these built-ins, so they get seeded back in from here at startup.
+COPY strategies ./strategies.builtin
 COPY alembic ./alembic
 COPY alembic.ini ./
 COPY tests ./tests

@@ -1,4 +1,4 @@
-"""M6: execution pipeline (buy/sell, dedup lock, partial sell) and risk gate."""
+"""M6: execution pipeline (buy/sell, dedup lock, partial sell)."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ async def _make_user(db: Database) -> int:
         return user.id
 
 
-def _engine(db: Database, broker: PaperBroker, *, risk: dict | None = None, bus=None) -> ExecutionEngine:
+def _engine(db: Database, broker: PaperBroker, *, bus=None) -> ExecutionEngine:
     async def resolve(_uid: int, _ac: str) -> PaperBroker:
         return broker
 
@@ -29,7 +29,6 @@ def _engine(db: Database, broker: PaperBroker, *, risk: dict | None = None, bus=
     async def config(_uid: int, _ac: str | None) -> dict:
         return {
             "execution": {"quantity_mode": "fixed_usd", "fixed_usd": 1000.0},
-            "risk": risk or {"enabled": False},
         }
 
     return ExecutionEngine(
@@ -83,29 +82,6 @@ async def test_concurrent_buys_deduped_by_lock(db: Database) -> None:
         orders = await OrderRepository(s).list_by_user(uid)
     assert len(positions) == 1
     assert len([o for o in orders if o.side == "buy"]) == 1
-
-
-async def test_risk_gate_blocks_oversized_buy(db: Database) -> None:
-    uid = await _make_user(db)
-    broker = PaperBroker()
-    broker.set_price("AAPL", 100.0)
-
-    bus = EventBus()
-    rejects: list[OrderRejectedEvent] = []
-    bus.subscribe(OrderRejectedEvent, lambda e: rejects.append(e))
-
-    engine = _engine(
-        db,
-        broker,
-        risk={"enabled": True, "max_single_trade_usd": 500.0},
-        bus=bus,
-    )
-    await engine.handle_buy(BuySignalEvent(ticker="AAPL", user_id=uid, source="t"))
-
-    async with db.session() as s:
-        positions = await PositionRepository(s).list_open(uid)
-    assert positions == []
-    assert rejects and rejects[0].reason == "max_single_trade_usd"
 
 
 async def test_partial_then_full_sell(db: Database) -> None:

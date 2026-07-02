@@ -5,7 +5,6 @@ from __future__ import annotations
 from .base import BaseRepository
 from .config import ConfigRepository
 from .credential import CredentialRepository
-from .daily_loss import DailyLossRepository
 from .order import OrderRepository
 from .position import PositionRepository
 from .price import PriceFetchLogRepository, PriceWatchlistRepository
@@ -17,7 +16,6 @@ __all__ = [
     "BaseRepository",
     "ConfigRepository",
     "CredentialRepository",
-    "DailyLossRepository",
     "OrderRepository",
     "PositionRepository",
     "PriceFetchLogRepository",

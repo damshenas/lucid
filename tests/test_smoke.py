@@ -21,6 +21,5 @@ def test_default_yml_matches_schema() -> None:
     default_yml = Path("src/conf/default.yml")
     data = yaml.safe_load(default_yml.read_text())
     config = LucidConfig.model_validate(data)
-    assert config.risk.enabled is False
     assert config.broker.paper_mode is True
     assert config.execution.quantity_mode.value == "fixed_usd"

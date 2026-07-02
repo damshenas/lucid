@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.modules.configs import ConfigService, load_default_config
-from src.modules.strategy import StrategyRegistryService, discover_strategies
+from src.modules.strategy import StrategyRegistryService, discover_strategies, seed_missing_strategies
 
 
 def test_discover_builtins() -> None:
@@ -15,6 +17,24 @@ def test_discover_builtins() -> None:
     assert loaded["trend_follow"].is_builtin is True
     assert "trailing_stop" in loaded
     assert loaded["trailing_stop"].direction == "sell"
+
+
+def test_seed_missing_strategies_fills_empty_mount_without_overwriting(tmp_path: Path) -> None:
+    source = tmp_path / "builtin"
+    target = tmp_path / "mounted"
+    (source / "buy").mkdir(parents=True)
+    (source / "buy" / "a.py").write_text("STRATEGY_NAME='a'\n")
+    (target / "buy").mkdir(parents=True)
+    (target / "buy" / "a.py").write_text("STRATEGY_NAME='a-customized'\n")
+
+    seeded = seed_missing_strategies(source, target)
+
+    assert seeded == []  # already present -> never overwritten
+    assert "customized" in (target / "buy" / "a.py").read_text()
+
+
+def test_seed_missing_strategies_noop_when_same_path(tmp_path: Path) -> None:
+    assert seed_missing_strategies(tmp_path, tmp_path) == []
 
 
 async def test_scan_upserts_registry(session: AsyncSession) -> None:

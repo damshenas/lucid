@@ -17,7 +17,17 @@ services:
       DATABASE_URL: postgresql+asyncpg://app:${PSPW}@host.containers.internal:5432/lucid
       LUCID_ENCRYPTION_KEY: ${LCEK}
       LUCID_JWT_SECRET: ${LJWS}
-      STRATEGIES_ROOT: /strategies
+      # STRATEGIES_ROOT is where the app loads strategies from and must be writable so
+      # the git-sync deploy step (src/scripts/sync_algorithms.py) can copy into it (see
+      # the matching volume mount below). BUILTIN_STRATEGIES_ROOT is the immutable copy
+      # baked into the image (docker/Dockerfile) used to seed STRATEGIES_ROOT on first
+      # boot, since a fresh bind mount would otherwise hide the built-ins. ALGORITHMS_ROOT
+      # is a staging mount for the optional git sync (see modules/com/git) — files are
+      # copied from there into STRATEGIES_ROOT; the app never runs code directly out of
+      # ALGORITHMS_ROOT.
+      STRATEGIES_ROOT: /app/strategies
+      BUILTIN_STRATEGIES_ROOT: /app/strategies.builtin
+      ALGORITHMS_ROOT: /algorithms
       # Bind outbound traffic to the LAN/WAN-facing NIC (same pattern as
       # services/ddns/ddns.py's SO_BINDTODEVICE use of eno1).
       BIND_IFACE: eno1
@@ -32,3 +42,4 @@ services:
     volumes:
       - /container/lucid/data:/data:rw,z
       - /container/lucid/algorithms:/algorithms:rw,z
+      - /container/lucid/strategies:/app/strategies:rw,z

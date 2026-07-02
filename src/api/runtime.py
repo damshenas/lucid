@@ -14,6 +14,7 @@ from src.modules.db.repositories.price import PriceFetchLogRepository, PriceWatc
 from src.modules.db.repositories.position import PositionRepository
 from src.modules.db.repositories.user import UserRepository
 from src.modules.com import yahoofinance
+from src.modules.com.git import sync_and_deploy
 from src.modules.execution import ExecutionEngine
 from src.modules.logger import get_logger
 from src.modules.price import storage
@@ -141,6 +142,27 @@ class TradingRuntime:
         async with self.ctx.db.transaction() as session:
             await self.ctx.strategy_service(session).scan()
 
+    async def _git_sync(self) -> None:
+        """Pull the algorithm repo into the staging mount, then deploy into strategies.
+
+        The staging mount (``ALGORITHMS_ROOT``) is never executed from directly; only
+        files copied into ``STRATEGIES_ROOT`` by ``deploy_strategies`` are loaded.
+        """
+        async with self.ctx.db.session() as session:
+            values = await self.ctx.config_service(session).compile_values()
+        git_cfg = values.get("git_sync", {})
+        if not git_cfg.get("enabled") or not git_cfg.get("repo_url"):
+            return
+        commit, copied = await sync_and_deploy(
+            repo_url=git_cfg["repo_url"],
+            branch=git_cfg.get("branch", "main"),
+            staging_root=self.ctx.algorithms_root,
+            target_root=self.ctx.strategies_root,
+        )
+        if copied:
+            await self._scan_strategies()
+        _logger.info("git sync complete at %s (%d file(s) updated)", commit[:8], len(copied))
+
     def register_jobs(self) -> None:
         schedule = self.ctx.settings.schedule
         pipeline = self._pipeline()
@@ -160,6 +182,11 @@ class TradingRuntime:
             id="run_strategies",
             seconds=max(30, schedule.poll_positions_seconds),
         )
+        git_sync_minutes = self.ctx.settings.git_sync.interval_minutes
+        if git_sync_minutes > 0:
+            self.scheduler.add_interval_job(
+                self._git_sync, id="git_sync", minutes=git_sync_minutes
+            )
 
     # -- lifecycle ---------------------------------------------------------
 

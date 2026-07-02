@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 from .context import PositionView, StrategyContext
-from .loader import LoadedStrategy, StrategyLoadError, discover_strategies, load_strategy_file
+from .loader import (
+    LoadedStrategy,
+    StrategyLoadError,
+    discover_strategies,
+    load_strategy_file,
+    seed_missing_strategies,
+)
 from .registry import StrategyRegistryService, build_extra_sections
 
 __all__ = [
@@ -15,4 +21,5 @@ __all__ = [
     "build_extra_sections",
     "discover_strategies",
     "load_strategy_file",
+    "seed_missing_strategies",
 ]

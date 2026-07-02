@@ -126,3 +126,95 @@ def test_create_user_invalid_role_rejected(client: TestClient) -> None:
         json={"username": "bob", "password": "somepassword", "role": "superadmin"},
     )
     assert resp.status_code == 422
+
+
+def test_system_credentials_admin_only(client: TestClient) -> None:
+    admin_token = client.post(
+        "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
+    ).json()["access_token"]
+    client.post(
+        "/api/v1/admin/users",
+        headers=_auth(admin_token),
+        json={"username": "trader1", "password": "traderpass", "role": "trader"},
+    )
+    trader_token = client.post(
+        "/api/v1/auth/login", json={"username": "trader1", "password": "traderpass"}
+    ).json()["access_token"]
+
+    catalog = client.get("/api/v1/credentials/system", headers=_auth(admin_token))
+    assert catalog.status_code == 200
+    assert all(item["configured"] is False for item in catalog.json())
+
+    set_resp = client.post(
+        "/api/v1/credentials/system",
+        headers=_auth(admin_token),
+        json={"key": "trading212_api_key", "value": "SYSTEM_KEY"},
+    )
+    assert set_resp.status_code == 204
+
+    catalog2 = client.get("/api/v1/credentials/system", headers=_auth(admin_token)).json()
+    configured = {row["key"]: row["configured"] for row in catalog2}
+    assert configured["trading212_api_key"] is True
+
+    # traders cannot manage system credentials
+    assert (
+        client.get("/api/v1/credentials/system", headers=_auth(trader_token)).status_code == 403
+    )
+    assert (
+        client.post(
+            "/api/v1/credentials/system",
+            headers=_auth(trader_token),
+            json={"key": "trading212_api_key", "value": "x"},
+        ).status_code
+        == 403
+    )
+
+    # unknown keys are rejected
+    bad = client.post(
+        "/api/v1/credentials/system",
+        headers=_auth(admin_token),
+        json={"key": "not_a_real_key", "value": "x"},
+    )
+    assert bad.status_code == 400
+
+
+def test_own_credentials_trader_only(client: TestClient) -> None:
+    admin_token = client.post(
+        "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
+    ).json()["access_token"]
+    client.post(
+        "/api/v1/admin/users",
+        headers=_auth(admin_token),
+        json={"username": "trader2", "password": "traderpass", "role": "trader"},
+    )
+    trader_token = client.post(
+        "/api/v1/auth/login", json={"username": "trader2", "password": "traderpass"}
+    ).json()["access_token"]
+
+    mine = client.get("/api/v1/credentials/mine", headers=_auth(trader_token))
+    assert mine.status_code == 200
+    assert mine.json()["use_default_credentials"] is False
+
+    set_resp = client.post(
+        "/api/v1/credentials/mine",
+        headers=_auth(trader_token),
+        json={"key": "trading212_api_key", "value": "USER_KEY"},
+    )
+    assert set_resp.status_code == 204
+
+    mine2 = client.get("/api/v1/credentials/mine", headers=_auth(trader_token)).json()
+    configured = {row["key"]: row["configured"] for row in mine2["credentials"]}
+    assert configured["trading212_api_key"] is True
+
+    toggle = client.patch(
+        "/api/v1/credentials/mine/use-default",
+        headers=_auth(trader_token),
+        json={"use_default_credentials": True},
+    )
+    assert toggle.status_code == 204
+    assert client.get("/api/v1/credentials/mine", headers=_auth(trader_token)).json()[
+        "use_default_credentials"
+    ] is True
+
+    # admin (no edit_own_credentials permission) cannot use the "mine" routes
+    assert client.get("/api/v1/credentials/mine", headers=_auth(admin_token)).status_code == 403

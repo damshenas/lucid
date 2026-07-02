@@ -16,12 +16,11 @@ strategy:
     atr_multiplier: 3.0
     profit_take_levels: [20.0, 50.0]
 
-risk:
-  enabled: false                # pre-trade risk gate is opt-in
-  max_single_trade_usd: 1000.0
-  max_daily_buy_usd: 5000.0
-  max_open_positions: 20
-  max_position_pct: 15.0
+git_sync:
+  enabled: false                # pulls strategies from a git repo into the algorithms
+  repo_url: null                # staging dir, then deploys them into the strategies dir
+  branch: main
+  interval_minutes: 0           # 0 disables the scheduled sync (still runs at startup)
 
 schedule:
   task_timeout_seconds: 300
@@ -29,7 +28,6 @@ schedule:
   daily_price_hour: 22
   intraday_price_minutes: 15
   strategy_scan_hour: 3
-  git_sync_minutes: 0
 
 price:
   storage_path: /data/prices

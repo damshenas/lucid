@@ -1,7 +1,9 @@
 import type {
   AdminUser,
   BacktestResult,
+  CredentialCatalogItem,
   Job,
+  MyCredentials,
   Order,
   Position,
   PriceBars,
@@ -98,4 +100,26 @@ export const api = {
       body: JSON.stringify({ username, password, role }),
     }),
   adminJobs: () => request<Job[]>("/api/v1/admin/jobs"),
+  changePassword: (newPassword: string) =>
+    request<{ ok: boolean }>("/api/v1/auth/change-password", {
+      method: "POST",
+      body: JSON.stringify({ new_password: newPassword }),
+    }),
+  systemCredentials: () => request<CredentialCatalogItem[]>("/api/v1/credentials/system"),
+  setSystemCredential: (key: string, value: string) =>
+    request<void>("/api/v1/credentials/system", {
+      method: "POST",
+      body: JSON.stringify({ key, value }),
+    }),
+  myCredentials: () => request<MyCredentials>("/api/v1/credentials/mine"),
+  setMyCredential: (key: string, value: string) =>
+    request<void>("/api/v1/credentials/mine", {
+      method: "POST",
+      body: JSON.stringify({ key, value }),
+    }),
+  setUseDefaultCredentials: (useDefault: boolean) =>
+    request<void>("/api/v1/credentials/mine/use-default", {
+      method: "PATCH",
+      body: JSON.stringify({ use_default_credentials: useDefault }),
+    }),
 };

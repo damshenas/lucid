@@ -43,21 +43,26 @@ class StrategyConfig(BaseModel):
     trailing_stop: TrailingStopConfig = Field(default_factory=TrailingStopConfig)
 
 
-class RiskConfig(BaseModel):
-    enabled: bool = False
-    max_single_trade_usd: float = 1000.0
-    max_daily_buy_usd: float = 5000.0
-    max_open_positions: int = 20
-    max_position_pct: float = 15.0
-
-
 class ScheduleConfig(BaseModel):
     task_timeout_seconds: int = 300
     poll_positions_seconds: int = 300
     daily_price_hour: int = 22
     intraday_price_minutes: int = 15
     strategy_scan_hour: int = 3
-    git_sync_minutes: int = 0  # 0 disables scheduled git sync
+
+
+class GitSyncConfig(BaseModel):
+    """System-level (admin-only) config for syncing algorithm files from a git repo.
+
+    ``repo_url`` is cloned/pulled into the ``ALGORITHMS_ROOT`` staging directory (a
+    mounted volume), then discovered ``buy``/``sell`` strategy files are copied into
+    ``STRATEGIES_ROOT`` — the app never runs code directly out of the staging mount.
+    """
+
+    enabled: bool = False
+    repo_url: str | None = None
+    branch: str = "main"
+    interval_minutes: int = 0  # 0 disables the scheduled sync (startup sync still runs)
 
 
 class PriceConfig(BaseModel):
@@ -82,8 +87,8 @@ class LucidConfig(BaseModel):
 
     execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
     strategy: StrategyConfig = Field(default_factory=StrategyConfig)
-    risk: RiskConfig = Field(default_factory=RiskConfig)
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
+    git_sync: GitSyncConfig = Field(default_factory=GitSyncConfig)
     price: PriceConfig = Field(default_factory=PriceConfig)
     broker: BrokerConfig = Field(default_factory=BrokerConfig)
     logger: LoggerConfig = Field(default_factory=LoggerConfig)

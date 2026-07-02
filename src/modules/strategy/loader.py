@@ -7,6 +7,7 @@ and an ``async def run(context)``. Optional: ``STRATEGY_DESCRIPTION``, ``STRATEG
 from __future__ import annotations
 
 import importlib.util
+import shutil
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -80,3 +81,33 @@ def discover_strategies(strategies_root: str | Path) -> list[LoadedStrategy]:
                 continue
             loaded.append(load_strategy_file(path, direction))
     return loaded
+
+
+def seed_missing_strategies(source_root: str | Path, target_root: str | Path) -> list[str]:
+    """Copy built-in strategy files from ``source_root`` into ``target_root`` for any
+    file that doesn't already exist there.
+
+    Used at startup when ``STRATEGIES_ROOT`` is a fresh, writable, initially-empty
+    bind mount (required so the git-synced deploy target isn't the read-only image
+    layer) — without this, a brand-new mount would hide the built-in strategies baked
+    into the image. Never overwrites an existing file, so a git-synced file with the
+    same name always wins.
+    """
+    source = Path(source_root)
+    target = Path(target_root)
+    if source.resolve() == target.resolve():
+        return []
+    seeded: list[str] = []
+    for direction in _DIRECTIONS:
+        src_dir = source / direction
+        if not src_dir.is_dir():
+            continue
+        dst_dir = target / direction
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        for path in sorted(src_dir.glob("*.py")):
+            dst_path = dst_dir / path.name
+            if dst_path.exists():
+                continue
+            shutil.copy2(path, dst_path)
+            seeded.append(f"{direction}/{path.name}")
+    return seeded

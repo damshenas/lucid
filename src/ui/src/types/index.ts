@@ -83,3 +83,15 @@ export interface Job {
   last_status: string | null;
   last_error: string | null;
 }
+
+export interface CredentialCatalogItem {
+  key: string;
+  label: string;
+  secret: boolean;
+  configured: boolean;
+}
+
+export interface MyCredentials {
+  use_default_credentials: boolean;
+  credentials: CredentialCatalogItem[];
+}

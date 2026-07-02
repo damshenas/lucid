@@ -18,7 +18,7 @@ PostgreSQL, Parquet price storage, single hardened Docker container on port 8686
         │                       │                                │
         ▼                       ▼                                ▼
    src/db (models)        modules/signal                  modules/broker
-   modules/db (repos)     modules/risk (gate)             com/trading212 | paper
+   modules/db (repos)     modules/signal                  modules/broker
         │                                                        │
         ▼                                                        ▼
    PostgreSQL                                             modules/price (Parquet,
@@ -42,7 +42,7 @@ scheduler.run_strategies (per trader, per watchlist ticker)
   → active buy/sell strategy .run(StrategyContext)
     → BuySignalEvent / SellSignalEvent published on the bus
       → ExecutionEngine.handle_buy/handle_sell
-        → per-ticker lock · position check · sizing · risk gate · broker order
+        → per-ticker lock · position check · sizing · broker order
           → OrderFilledEvent / OrderRejectedEvent
 ```
 
@@ -59,7 +59,6 @@ scheduler.run_strategies (per trader, per watchlist ticker)
 | `authorization` | RBAC: admin / trader / viewer |
 | `broker` | Abstract broker + registry + paper broker |
 | `execution` | Signal → order pipeline (no decisions) |
-| `risk` | Pre-trade gate (disabled by default) |
 | `price` | Pipelines, Parquet storage, indicators, regime |
 | `signal` | Signal lifecycle: store, dedup, outcomes |
 | `schedules` | Thin APScheduler wrapper with timeouts |
@@ -68,4 +67,23 @@ scheduler.run_strategies (per trader, per watchlist ticker)
 | `health` | Liveness/readiness probes (silent in logs) |
 | `netbind` | Outbound NIC binding (VPN bypass prevention) |
 | `com/*` | External connectors (trading212, yahoo, zacks, …) |
+
+## Algorithm git sync
+
+`com/git.GitSync` clones/pulls the configured repo (`git_sync.repo_url`, admin-only
+system setting) into `ALGORITHMS_ROOT` — a mounted volume, never executed from
+directly. Discovered `buy/`/`sell/` files are then copied into `STRATEGIES_ROOT`, the
+directory `modules/strategy/loader` actually scans:
+
+```
+git repo ──sync──▶ ALGORITHMS_ROOT (staging, mounted volume)
+                        │ deploy_strategies() copies *.py
+                        ▼
+                  STRATEGIES_ROOT (served by the app)
+```
+
+This runs once at container startup (`src/scripts/sync_algorithms.py`, invoked from
+`docker/entrypoint.sh` before the app starts — the mounted volume may have received
+newer pulls since the image was built) and again on `git_sync.interval_minutes` via the
+scheduler, so the app never runs code straight out of the staging mount.
 ```
