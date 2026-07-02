@@ -4,7 +4,6 @@ This module makes no trading decisions — strategies decide, it executes. It:
 - de-duplicates concurrent orders per ticker with an ``asyncio.Lock``
 - skips buys when a position is already open
 - sizes the order (``fixed_usd`` | ``pct_portfolio`` | ``half_kelly``)
-- runs the optional risk gate
 - places the order via the resolved broker
 - records the order/position and publishes fill/reject events
 """
@@ -30,7 +29,7 @@ from src.modules.db.models.base import OrderSide, OrderStatus, PositionStatus
 from src.modules.db.repositories.order import OrderRepository
 from src.modules.db.repositories.position import PositionRepository
 from src.modules.logger import get_logger
-from src.modules.risk import RiskContext, RiskGate
+
 
 from .sizing import compute_buy_quantity
 
@@ -45,11 +44,6 @@ async def _maybe_await(value: Any) -> Any:
     if inspect.isawaitable(value):
         return await value
     return value
-
-
-def _utc_day_start() -> datetime:
-    now = datetime.now(timezone.utc)
-    return now.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
 class ExecutionEngine:
@@ -118,22 +112,6 @@ class ExecutionEngine:
                     await self._reject(event.ticker, event.user_id, "buy", "zero quantity")
                     return
 
-                order_usd = quantity * price
-                gate = RiskGate(config.get("risk"))
-                open_positions = await positions.list_open(event.user_id)
-                daily_buy = await orders.total_buy_usd_since(event.user_id, _utc_day_start())
-                decision = gate.evaluate_buy(
-                    RiskContext(
-                        order_usd=order_usd,
-                        open_positions=len(open_positions),
-                        portfolio_value=summary.equity,
-                        daily_buy_usd=daily_buy,
-                    )
-                )
-                if not decision.approved:
-                    await self._reject(event.ticker, event.user_id, "buy", decision.reason or "risk")
-                    return
-
                 result = await broker.place_market_order(
                     event.ticker, quantity, asset_class=event.asset_class
                 )
@@ -177,7 +155,6 @@ class ExecutionEngine:
 
     async def handle_sell(self, event: SellSignalEvent) -> None:
         async with self._lock(event.user_id, event.ticker):
-            config = await _maybe_await(self._config(event.user_id, event.asset_class))
             async with self._db.transaction() as session:
                 positions = PositionRepository(session)
                 orders = OrderRepository(session)
@@ -197,14 +174,6 @@ class ExecutionEngine:
 
                 price = float(await _maybe_await(self._quote(event.ticker)))
                 broker = await _maybe_await(self._resolve_broker(event.user_id, event.asset_class))
-
-                gate = RiskGate(config.get("risk"))
-                decision = gate.evaluate_sell(
-                    RiskContext(order_usd=quantity * price, open_positions=0, portfolio_value=0.0)
-                )
-                if not decision.approved:
-                    await self._reject(event.ticker, event.user_id, "sell", decision.reason or "risk")
-                    return
 
                 result = await broker.place_market_order(
                     event.ticker, -quantity, asset_class=event.asset_class

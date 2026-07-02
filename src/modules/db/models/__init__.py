@@ -19,7 +19,6 @@ from .log import AppLog
 from .order import Order
 from .position import Position
 from .price import PriceFetchLog, PriceWatchlist
-from .risk import DailyLoss
 from .signal import Signal, SignalOutcome
 from .strategy import StrategyRegistry
 from .user import User
@@ -29,7 +28,6 @@ __all__ = [
     "AssetClass",
     "Base",
     "Credential",
-    "DailyLoss",
     "Direction",
     "Order",
     "OrderSide",
