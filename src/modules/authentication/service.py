@@ -81,7 +81,13 @@ class AuthService:
             raise InvalidCredentialsError("invalid username or password")
 
         now = datetime.now(timezone.utc)
-        if user.locked_until is not None and user.locked_until > now:
+        locked_until = user.locked_until
+        # SQLite (used in tests) doesn't persist tzinfo on DateTime(timezone=True)
+        # columns, so a value we stored as aware UTC can come back naive. Treat any
+        # naive value as UTC rather than comparing naive vs. aware, which raises.
+        if locked_until is not None and locked_until.tzinfo is None:
+            locked_until = locked_until.replace(tzinfo=timezone.utc)
+        if locked_until is not None and locked_until > now:
             raise AccountLockedError(
                 "account temporarily locked after too many failed login attempts"
             )

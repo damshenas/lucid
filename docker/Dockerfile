@@ -10,11 +10,16 @@ COPY src/ui/package.json ./
 # floor as the Python deps below), to reduce exposure to newly-published or
 # newly-compromised package releases. Computed via node (not `date -d`, which
 # busybox/alpine's date does not support) for portability across base images.
-# Always follow up with `npm audit fix` so known-vulnerable resolved versions
-# get patched even if that means going past the 14-day floor.
+# Always follow up with `npm audit fix`, and `--force` through anything that
+# still needs a breaking-change bump (npm exits non-zero otherwise). This is a
+# build-only stage (nothing here ships in the final image, see COPY --from=ui
+# below), so a forced major bump of a build tool is safe to accept here: if it
+# breaks anything, `npm run build` fails immediately and the Docker build gate
+# catches it, same as the pytest gate does for the Python side.
 RUN NPM_BEFORE="$(node -e 'console.log(new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString())')" && \
     npm install --before "$NPM_BEFORE" && \
-    npm audit fix
+    (npm audit fix || true) && \
+    npm audit fix --force
 COPY src/ui/ ./
 RUN npm run build
 

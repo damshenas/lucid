@@ -36,16 +36,19 @@ def test_health_ready(client: TestClient) -> None:
 def test_setup_login_and_locked(client: TestClient) -> None:
     assert client.get("/api/v1/auth/status").json() == {"initialized": False}
 
-    resp = client.post("/api/v1/auth/setup", json={"username": "root", "password": "pw"})
+    resp = client.post("/api/v1/auth/setup", json={"username": "root", "password": "password123"})
     assert resp.status_code == 201
     assert resp.json()["access_token"]
 
     assert client.get("/api/v1/auth/status").json() == {"initialized": True}
 
     # second setup is locked
-    assert client.post("/api/v1/auth/setup", json={"username": "x", "password": "y"}).status_code == 409
+    assert (
+        client.post("/api/v1/auth/setup", json={"username": "x", "password": "password123"}).status_code
+        == 409
+    )
 
-    login = client.post("/api/v1/auth/login", json={"username": "root", "password": "pw"})
+    login = client.post("/api/v1/auth/login", json={"username": "root", "password": "password123"})
     assert login.status_code == 200
 
 
@@ -54,9 +57,9 @@ def test_requires_auth(client: TestClient) -> None:
 
 
 def test_settings_schema_and_strategies(client: TestClient) -> None:
-    token = client.post("/api/v1/auth/setup", json={"username": "root", "password": "pw"}).json()[
-        "access_token"
-    ]
+    token = client.post(
+        "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
+    ).json()["access_token"]
 
     schema = client.get("/api/v1/settings/schema", headers=_auth(token))
     assert schema.status_code == 200
@@ -71,9 +74,9 @@ def test_settings_schema_and_strategies(client: TestClient) -> None:
 
 
 def test_save_secret_rejected(client: TestClient) -> None:
-    token = client.post("/api/v1/auth/setup", json={"username": "root", "password": "pw"}).json()[
-        "access_token"
-    ]
+    token = client.post(
+        "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
+    ).json()["access_token"]
     resp = client.post(
         "/api/v1/settings",
         headers=_auth(token),
@@ -84,7 +87,7 @@ def test_save_secret_rejected(client: TestClient) -> None:
 
 def test_settings_write_requires_permission(client: TestClient) -> None:
     admin_token = client.post(
-        "/api/v1/auth/setup", json={"username": "root", "password": "pw"}
+        "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
     ).json()["access_token"]
 
     created = client.post(
@@ -115,7 +118,7 @@ def test_settings_write_requires_permission(client: TestClient) -> None:
 
 def test_create_user_invalid_role_rejected(client: TestClient) -> None:
     admin_token = client.post(
-        "/api/v1/auth/setup", json={"username": "root", "password": "pw"}
+        "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
     ).json()["access_token"]
     resp = client.post(
         "/api/v1/admin/users",
