@@ -10,7 +10,11 @@ echo "[entrypoint] applying database migrations..."
 alembic upgrade head
 
 echo "[entrypoint] syncing algorithm repo (if configured)..."
-python -m src.scripts.sync_algorithms
+# Best-effort: sync_algorithms.py already catches its own errors (bad git config,
+# unwritable STRATEGIES_ROOT mount, etc.) and logs+continues rather than raising. This
+# guard is defense-in-depth so an unexpected failure here can never take the whole app
+# down — worst case it boots with whatever strategies already exist.
+python -m src.scripts.sync_algorithms || echo "[entrypoint] algorithm sync step failed, continuing startup"
 
 echo "[entrypoint] starting Lucid on port ${PORT:-8686}..."
 exec python -m src.launch

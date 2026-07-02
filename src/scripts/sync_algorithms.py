@@ -56,10 +56,24 @@ async def main() -> None:
     # so the git-sync deploy target isn't the read-only image layer). Seed it from the
     # image's baked-in built-in strategies first, without ever overwriting a file the
     # mount already has (a prior git sync always wins on conflict).
+    #
+    # This whole step is best-effort: a misconfigured/unwritable mount (wrong host
+    # ownership — see docker/prepare.sh) must never prevent the app from starting.
+    # Worst case the app boots with whatever strategies already exist at
+    # STRATEGIES_ROOT (possibly none, discoverable/fixable via POST
+    # /api/v1/strategies/scan once the mount is fixed), rather than not booting at all.
     builtin_root = os.environ.get("BUILTIN_STRATEGIES_ROOT", _DEFAULT_STRATEGIES_ROOT)
-    seeded = seed_missing_strategies(builtin_root, strategies_root)
-    if seeded:
-        _logger.info("seeded %d built-in strategy file(s) into %s", len(seeded), strategies_root)
+    try:
+        seeded = seed_missing_strategies(builtin_root, strategies_root)
+        if seeded:
+            _logger.info("seeded %d built-in strategy file(s) into %s", len(seeded), strategies_root)
+    except OSError as exc:
+        _logger.error(
+            "could not seed built-in strategies into %s — check that the mounted "
+            "volume is writable by this container's user (see docker/prepare.sh): %s",
+            strategies_root,
+            exc,
+        )
 
     if not git_cfg.get("enabled") or not git_cfg.get("repo_url"):
         _logger.info("git sync disabled or repo_url not set; skipping")
@@ -72,7 +86,7 @@ async def main() -> None:
             staging_root=algorithms_root,
             target_root=strategies_root,
         )
-    except GitError as exc:
+    except (GitError, OSError) as exc:
         _logger.error("git sync failed, continuing startup with existing strategies: %s", exc)
         return
 
