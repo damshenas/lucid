@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
+import { Accordion } from "../components/ui/Accordion";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 import { Toggle } from "../components/ui/Toggle";
@@ -69,10 +70,7 @@ export function Settings() {
 
       {Object.entries(schema).map(([section, fields]) => (
         <Card key={section}>
-          <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-white/40">
-            {section}
-          </h3>
-          <div className="space-y-3">
+          <Accordion title={section}>
             {Object.entries(fields).map(([field, meta]) => {
               const key = `${section}.${field}`;
               const current = key in edited ? edited[key] : meta.value;
@@ -102,9 +100,10 @@ export function Settings() {
                 </label>
               );
             })}
-          </div>
+          </Accordion>
         </Card>
       ))}
+
 
       <Button onClick={save} disabled={saving} className="w-full">
         {saving ? "Saving…" : "Save changes"}

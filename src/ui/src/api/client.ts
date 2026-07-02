@@ -1,4 +1,15 @@
-import type { Position, SettingsSchema, Strategy, Tokens } from "../types";
+import type {
+  AdminUser,
+  BacktestResult,
+  Job,
+  Order,
+  Position,
+  PriceBars,
+  SettingsSchema,
+  Signal,
+  Strategy,
+  Tokens,
+} from "../types";
 
 const TOKEN_KEY = "lucid_access_token";
 
@@ -41,7 +52,10 @@ export const api = {
       body: JSON.stringify({ username, password }),
     }),
   positions: () => request<Position[]>("/api/v1/positions"),
-  strategies: () => request<Strategy[]>("/api/v1/strategies"),
+  strategies: (direction?: "buy" | "sell") =>
+    request<Strategy[]>(
+      direction ? `/api/v1/strategies?direction=${direction}` : "/api/v1/strategies",
+    ),
   scanStrategies: () =>
     request<{ scanned: number }>("/api/v1/strategies/scan", { method: "POST" }),
   activateStrategy: (name: string, direction: string) =>
@@ -54,4 +68,34 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ values }),
     }),
+  syncPositions: (assetClass = "equity") =>
+    request<{ synced: number; closed: number }>(
+      `/api/v1/positions/sync?asset_class=${encodeURIComponent(assetClass)}`,
+      { method: "POST" },
+    ),
+  orders: (limit = 50, offset = 0) =>
+    request<Order[]>(`/api/v1/orders?limit=${limit}&offset=${offset}`),
+  signals: (limit = 50, offset = 0) =>
+    request<Signal[]>(`/api/v1/signals?limit=${limit}&offset=${offset}`),
+  priceBars: (ticker: string, interval = "1d", limit = 250) =>
+    request<PriceBars>(
+      `/api/v1/prices/${encodeURIComponent(ticker)}?interval=${encodeURIComponent(interval)}&limit=${limit}`,
+    ),
+  backfillPrices: (ticker: string, days = 365) =>
+    request<{ rows: number }>("/api/v1/prices/backfill", {
+      method: "POST",
+      body: JSON.stringify({ ticker, days }),
+    }),
+  runBacktest: (ticker: string, interval = "1d", strategy?: string) =>
+    request<BacktestResult>("/api/v1/backtesting/run", {
+      method: "POST",
+      body: JSON.stringify({ ticker, interval, strategy: strategy || undefined }),
+    }),
+  adminUsers: () => request<AdminUser[]>("/api/v1/admin/users"),
+  createAdminUser: (username: string, password: string, role: string) =>
+    request<AdminUser>("/api/v1/admin/users", {
+      method: "POST",
+      body: JSON.stringify({ username, password, role }),
+    }),
+  adminJobs: () => request<Job[]>("/api/v1/admin/jobs"),
 };

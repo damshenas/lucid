@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, getToken, setToken } from "../api/client";
+import { decodeAccessToken } from "../lib/jwt";
+import type { Role } from "../lib/permissions";
 
 export function useAuth() {
   const [token, setTokenState] = useState<string | null>(getToken());
@@ -30,5 +32,9 @@ export function useAuth() {
     setTokenState(null);
   }, []);
 
-  return { token, initialized, login, setup, logout };
+  const claims = useMemo(() => decodeAccessToken(token), [token]);
+  const role = (claims?.role as Role | undefined) ?? null;
+  const userId = claims?.sub ?? null;
+
+  return { token, role, userId, initialized, login, setup, logout };
 }

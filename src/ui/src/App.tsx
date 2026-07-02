@@ -1,46 +1,96 @@
-import { useState } from "react";
-import { LogOut } from "lucide-react";
-import { BottomNav } from "./components/BottomNav";
-import { IconButton } from "./components/ui/IconButton";
+import { Navigate, Route, Routes } from "react-router-dom";
+import { AppLayout } from "./components/AppLayout";
+import { RequirePermission } from "./components/RequirePermission";
 import { useAuth } from "./hooks/useAuth";
+import { defaultPathFor } from "./lib/nav";
+import { Admin } from "./pages/Admin";
+import { Backtesting } from "./pages/Backtesting";
 import { Dashboard } from "./pages/Dashboard";
 import { Login } from "./pages/Login";
+import { Orders } from "./pages/Orders";
+import { Positions } from "./pages/Positions";
+import { Prices } from "./pages/Prices";
 import { Settings } from "./pages/Settings";
+import { Signals } from "./pages/Signals";
 import { Strategies } from "./pages/Strategies";
 
-const TITLES: Record<string, string> = {
-  dashboard: "Dashboard",
-  strategies: "Strategies",
-  settings: "Settings",
-};
-
 export function App() {
-  const { token, initialized, login, setup, logout } = useAuth();
-  const [view, setView] = useState("dashboard");
+  const { token, role, initialized, login, setup, logout } = useAuth();
 
   if (!token) {
     return <Login initialized={initialized} onLogin={login} onSetup={setup} />;
   }
 
   return (
-    <div className="min-h-screen">
-      <header className="glass sticky top-0 z-10 flex items-center justify-between px-4 py-3 sm:px-6">
-        <div className="flex items-center gap-2">
-          <span className="h-2 w-2 rounded-full bg-gradient-to-r from-violet to-cyan" />
-          <span className="text-lg font-semibold tracking-tight">
-            Lucid <span className="text-white/40 font-normal">/ {TITLES[view]}</span>
-          </span>
-        </div>
-        <IconButton icon={<LogOut size={18} />} label="Log out" onClick={logout} />
-      </header>
-
-      <main className="mx-auto max-w-2xl px-4 pb-28 pt-4 sm:px-6">
-        {view === "dashboard" && <Dashboard />}
-        {view === "strategies" && <Strategies />}
-        {view === "settings" && <Settings />}
-      </main>
-
-      <BottomNav current={view} onNavigate={setView} />
-    </div>
+    <Routes>
+      <Route path="/" element={<AppLayout role={role} onLogout={logout} />}>
+        <Route
+          index
+          element={
+            <RequirePermission role={role} permission="view_trading">
+              <Dashboard />
+            </RequirePermission>
+          }
+        />
+        <Route
+          path="positions"
+          element={
+            <RequirePermission role={role} permission="view_trading">
+              <Positions />
+            </RequirePermission>
+          }
+        />
+        <Route
+          path="signals"
+          element={
+            <RequirePermission role={role} permission="view_trading">
+              <Signals />
+            </RequirePermission>
+          }
+        />
+        <Route
+          path="orders"
+          element={
+            <RequirePermission role={role} permission="view_trading">
+              <Orders />
+            </RequirePermission>
+          }
+        />
+        <Route
+          path="prices"
+          element={
+            <RequirePermission role={role} permission="view_trading">
+              <Prices />
+            </RequirePermission>
+          }
+        />
+        <Route
+          path="strategies"
+          element={
+            <RequirePermission role={role} permission="edit_own_strategies">
+              <Strategies />
+            </RequirePermission>
+          }
+        />
+        <Route
+          path="backtesting"
+          element={
+            <RequirePermission role={role} permission="edit_own_strategies">
+              <Backtesting />
+            </RequirePermission>
+          }
+        />
+        <Route path="settings" element={<Settings />} />
+        <Route
+          path="admin"
+          element={
+            <RequirePermission role={role} permission="manage_users">
+              <Admin />
+            </RequirePermission>
+          }
+        />
+        <Route path="*" element={<Navigate to={defaultPathFor(role)} replace />} />
+      </Route>
+    </Routes>
   );
 }
