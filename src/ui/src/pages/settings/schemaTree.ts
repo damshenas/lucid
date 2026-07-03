@@ -54,8 +54,9 @@ export function buildSchemaTree(schema: SettingsSchema): Record<string, GroupNod
  * Fixed so the tab bar doesn't reshuffle/flicker while the schema is still loading —
  * each tab just shows a loading placeholder until its section arrives.
  *
- * "logger" and "git_sync" are deliberately excluded here — they're rendered as nested
- * tabs under the composite "Service" tab instead (see pages/Settings.tsx).
+ * "logger" is deliberately excluded here — it's rendered as a nested tab under the
+ * composite "Service" tab instead, alongside Git Sync (schema-less; see
+ * pages/settings/GitSyncTab.tsx), both in pages/Settings.tsx.
  */
 export const SETTINGS_SECTION_ORDER = ["execution", "strategy", "schedule", "price", "broker"];
 

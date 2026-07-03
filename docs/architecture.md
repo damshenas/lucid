@@ -89,12 +89,12 @@ merged from two sources, in order:
 EXT_STRATEGIES (pre-cloned checkout) ──git pull──▶ (staged) ──deploy (overwrite)──▶ STRATEGIES_ROOT (served by the app)
 ```
 
-This runs once at container startup (`src/scripts/sync_algorithms.py`, invoked from
-`docker/entrypoint.sh` before the app starts), gated by `git_sync.enabled`. Beyond
-that, syncing is **on-demand only** — there is no recurring schedule. An admin
-triggers it via `POST /api/v1/admin/git-sync` (the "Sync now" button in Settings >
-Service > Git Sync), which always runs regardless of `git_sync.enabled` — clicking it
-is itself the admin's consent, so it must not depend on that separate setting having
-been saved first (`enabled` only gates the automatic startup run above). Either way,
+This runs unconditionally at container startup (`src/scripts/sync_algorithms.py`,
+invoked from `docker/entrypoint.sh` before the app starts) — best-effort, so a missing
+or not-yet-provisioned `EXT_STRATEGIES` checkout is logged and skipped rather than
+failing the boot. Beyond that, syncing is **on-demand only** — there is no recurring
+schedule and no separate enable/disable setting. An admin triggers it any time via
+`POST /api/v1/admin/git-sync` (the "Sync now" button in Settings > Service > Git
+Sync); clicking it is itself the admin's consent. Either way,
 the app never runs code straight out of the image layer or the staging mount — only
 out of the merged `STRATEGIES_ROOT`.

@@ -36,7 +36,7 @@ def test_is_secret_key() -> None:
 
 def test_load_default_yml_ok() -> None:
     data = load_default_config("src/conf/default.yml")
-    assert data["git_sync"]["enabled"] is False
+    assert data["execution"]["fixed_usd"] == 100.0
 
 
 async def test_resolution_order(session: AsyncSession) -> None:
@@ -93,7 +93,6 @@ async def test_compile_schema_from_model(session: AsyncSession) -> None:
     schema = await svc.compile_schema(user_id=1, asset_class="equity")
     assert "execution" in schema
     assert schema["execution"]["fixed_usd"]["value"] == 100.0
-    assert schema["git_sync"]["enabled"]["type"] == "bool"
 
 
 async def test_compile_schema_changes_with_active_strategy(session: AsyncSession) -> None:

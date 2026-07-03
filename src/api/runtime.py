@@ -146,13 +146,10 @@ class TradingRuntime:
         """Pull the already-cloned ``EXT_STRATEGIES`` checkout, then deploy into strategies.
 
         On-demand only (triggered by an admin via ``POST /api/v1/admin/git-sync``) —
-        there is no recurring schedule, and unlike the startup sync this ignores
-        ``git_sync.enabled`` (that flag only gates the automatic startup sync in
-        ``src/scripts/sync_algorithms.py``): clicking the button is itself the
-        admin's explicit consent, so it must not depend on a separate setting having
-        been saved first. The staging mount (``EXT_STRATEGIES``) is never executed
-        from directly; only files copied into ``STRATEGIES_ROOT`` by
-        ``deploy_strategies`` are loaded.
+        there is no recurring schedule and no enable/disable setting; clicking the
+        button is itself the admin's explicit consent. The staging mount
+        (``EXT_STRATEGIES``) is never executed from directly; only files copied into
+        ``STRATEGIES_ROOT`` by ``deploy_strategies`` are loaded.
         """
         commit, copied = await sync_and_deploy(
             staging_root=self.ctx.ext_strategies_root,

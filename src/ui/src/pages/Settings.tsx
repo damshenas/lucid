@@ -87,11 +87,14 @@ export function Settings() {
     setSaving(true);
     try {
       await api.saveSettings(edited);
-      setEdited({});
-      // Refetch so `field.value` reflects what was just persisted — without this,
-      // switching tabs (which doesn't remount this page) re-renders from the stale
-      // schema fetched at mount and saved changes look reverted until a hard refresh.
+      // Refetch (and apply it) *before* clearing `edited` — otherwise there's a
+      // render in between with `edited` already cleared but `schema` still the stale
+      // snapshot fetched at mount, which briefly (or, if the refetch is slow/fails,
+      // not-so-briefly) shows saved fields reverted to their pre-save values. Clearing
+      // `edited` only after fresh values have replaced `schema` ensures the toggle/
+      // field never displays anything other than what's actually persisted.
       await refreshSchema();
+      setEdited({});
       setStatus({ text: "Saved.", tone: "success" });
     } catch (e) {
       setStatus({ text: (e as Error).message, tone: "error" });
@@ -180,20 +183,7 @@ export function Settings() {
         level="nested"
         tabs={[
           { id: "logging", label: "Logging", content: schemaTab("logger") },
-          {
-            id: "git-sync",
-            label: "Git Sync",
-            content: schemaLoaded ? (
-              <GitSyncTab
-                gitSyncNode={tree.git_sync ?? emptyGroup()}
-                edited={edited}
-                onChange={onFieldChange}
-                readOnly={!canWriteSection(role, "git_sync")}
-              />
-            ) : (
-              <p className="py-6 text-center text-sm text-white/40">Loading…</p>
-            ),
-          },
+          { id: "git-sync", label: "Git Sync", content: <GitSyncTab /> },
         ]}
       />
     ),

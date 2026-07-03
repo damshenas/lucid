@@ -48,23 +48,6 @@ class ScheduleConfig(BaseModel):
     strategy_scan_hour: int = 3
 
 
-class GitSyncConfig(BaseModel):
-    """System-level (admin-only) config for syncing algorithm files from a git repo.
-
-    ``EXT_STRATEGIES`` is expected to already be a git checkout with its remote/branch
-    configured out-of-band on the host — this only ever runs ``git pull`` in it, then
-    copies discovered ``buy``/``sell`` strategy files into ``STRATEGIES_ROOT``. The app
-    never runs code directly out of the staging mount.
-    """
-
-    # Gates only the automatic sync run once at container startup
-    # (src/scripts/sync_algorithms.py). The on-demand "Sync now" button
-    # (POST /api/v1/admin/git-sync) always works regardless of this flag — clicking
-    # it is itself the admin's consent, so it must not depend on a separate setting
-    # having been saved first.
-    enabled: bool = False
-
-
 class PriceConfig(BaseModel):
     storage_path: str = "/data/prices"
     backfill_days: int = 365
@@ -88,7 +71,6 @@ class LucidConfig(BaseModel):
     execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
     strategy: StrategyConfig = Field(default_factory=StrategyConfig)
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
-    git_sync: GitSyncConfig = Field(default_factory=GitSyncConfig)
     price: PriceConfig = Field(default_factory=PriceConfig)
     broker: BrokerConfig = Field(default_factory=BrokerConfig)
     logger: LoggerConfig = Field(default_factory=LoggerConfig)

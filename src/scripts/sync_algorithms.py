@@ -5,16 +5,16 @@ Run by ``docker/entrypoint.sh`` after migrations but before the app starts.
 ``STRATEGIES_ROOT`` is a writable-but-ephemeral directory (a tmpfs mount in
 production, see docker/compose.yml) that starts empty on every container start, so
 this always: (1) seeds it from the image's baked-in ``BUILTIN_STRATEGIES_ROOT``
-(``/app/strategies`` — never mounted over, always available), then (2) if git sync is
-enabled, pulls the already-cloned ``EXT_STRATEGIES`` checkout (remote/branch configured
-out-of-band on the host) and copies its ``buy``/``sell`` files on top. The app only
-ever scans ``STRATEGIES_ROOT`` — it never runs code directly out of ``EXT_STRATEGIES``
-— see ``src.modules.com.git.deploy_strategies``. Beyond this startup run, syncing is
-on-demand only, triggered by an admin via ``POST /api/v1/admin/git-sync`` — there is no
-recurring schedule.
-
-The git-sync portion is a no-op (with a log line) when ``git_sync.enabled`` is false.
-Safe to run without a reachable database (falls back to ``default.yml``).
+(``/app/strategies`` — never mounted over, always available), then (2) always attempts
+to pull the already-cloned ``EXT_STRATEGIES`` checkout (remote/branch configured
+out-of-band on the host) and copy its ``buy``/``sell`` files on top — a no-op (best
+effort, logged and skipped) when ``EXT_STRATEGIES`` isn't a git checkout at all. The
+app only ever scans ``STRATEGIES_ROOT`` — it never runs code directly out of
+``EXT_STRATEGIES`` — see ``src.modules.com.git.deploy_strategies``. Beyond this startup
+run, syncing is on-demand only, triggered by an admin via
+``POST /api/v1/admin/git-sync`` — there is no recurring schedule and no separate
+enable/disable setting; both run unconditionally, safe because a missing checkout is
+handled gracefully.
 """
 
 from __future__ import annotations
@@ -23,40 +23,16 @@ import asyncio
 import os
 
 from src.modules.com.git import GitError, sync_and_deploy
-from src.modules.configs import ConfigService, load_default_config
-from src.modules.db.connection import Database
 from src.modules.logger import get_logger
 from src.modules.strategy import seed_missing_strategies
 
 _logger = get_logger("scripts.sync_algorithms")
 
-_DEFAULT_CONFIG_PATH = "src/conf/default.yml"
 _DEFAULT_STRATEGIES_ROOT = "strategies"
 _DEFAULT_EXT_STRATEGIES_ROOT = "ext_strategies"
 
 
-async def _load_git_config(config_defaults: dict) -> dict:
-    """Resolve the ``git_sync`` section, preferring DB (system) overrides when reachable."""
-    database_url = os.environ.get("DATABASE_URL")
-    if not database_url:
-        return config_defaults.get("git_sync", {})
-
-    db = Database(database_url)
-    try:
-        async with db.session() as session:
-            values = await ConfigService(session, config_defaults).compile_values()
-        return values.get("git_sync", {})
-    except Exception as exc:  # noqa: BLE001 - DB not ready yet is a skip, not a crash
-        _logger.warning("could not read git_sync config from DB, using defaults: %s", exc)
-        return config_defaults.get("git_sync", {})
-    finally:
-        await db.dispose()
-
-
 async def main() -> None:
-    config_defaults = load_default_config(os.environ.get("CONFIG_PATH", _DEFAULT_CONFIG_PATH))
-    git_cfg = await _load_git_config(config_defaults)
-
     ext_strategies_root = os.environ.get("EXT_STRATEGIES", _DEFAULT_EXT_STRATEGIES_ROOT)
     strategies_root = os.environ.get("STRATEGIES_ROOT", _DEFAULT_STRATEGIES_ROOT)
 
@@ -82,10 +58,6 @@ async def main() -> None:
             strategies_root,
             exc,
         )
-
-    if not git_cfg.get("enabled"):
-        _logger.info("git sync disabled; skipping")
-        return
 
     try:
         commit, copied = await sync_and_deploy(

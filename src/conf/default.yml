@@ -15,11 +15,6 @@ strategy:
   # strategy file's own CONFIG_SCHEMA, not here — see src/conf/schema.py's
   # StrategyConfig docstring.
 
-git_sync:
-  enabled: false                # gates only the automatic sync at container startup;
-                                 # the on-demand "Sync now" button (POST
-                                 # /api/v1/admin/git-sync) always works regardless
-
 schedule:
   task_timeout_seconds: 300
   poll_positions_seconds: 300
