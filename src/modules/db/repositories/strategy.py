@@ -53,3 +53,15 @@ class StrategyRepository(BaseRepository[StrategyRegistry]):
             description=description,
             last_scanned_at=now,
         )
+
+    async def delete_missing(self, current_names: set[str]) -> list[str]:
+        """Delete registry rows whose name is no longer among currently discovered
+        strategies (e.g. a file's ``STRATEGY_NAME`` was renamed, or the file itself was
+        removed) — without this, a rename leaves the old name permanently listed
+        alongside the new one. Returns the removed names."""
+        stale = [row for row in await self.get_all() if row.name not in current_names]
+        for row in stale:
+            await self.session.delete(row)
+        if stale:
+            await self.session.flush()
+        return [row.name for row in stale]

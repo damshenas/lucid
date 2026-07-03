@@ -50,6 +50,34 @@ async def test_scan_upserts_registry(session: AsyncSession) -> None:
     assert len(rows2) == len(rows)
 
 
+async def test_scan_removes_stale_entry_after_rename(tmp_path: Path, session: AsyncSession) -> None:
+    """Renaming a strategy's STRATEGY_NAME must not leave the old name listed
+    alongside the new one after the next scan."""
+    (tmp_path / "buy").mkdir()
+    strat_path = tmp_path / "buy" / "renamable.py"
+    strat_path.write_text(
+        "STRATEGY_NAME='old_name'\n"
+        "STRATEGY_VERSION='1'\n"
+        "CONFIG_SCHEMA={}\n"
+        "async def run(context): return None\n"
+    )
+
+    registry = StrategyRegistryService(session, str(tmp_path))
+    rows = await registry.scan()
+    assert {r.name for r in rows} == {"old_name"}
+
+    strat_path.write_text(
+        "STRATEGY_NAME='new_name'\n"
+        "STRATEGY_VERSION='1'\n"
+        "CONFIG_SCHEMA={}\n"
+        "async def run(context): return None\n"
+    )
+    rows2 = await registry.scan()
+    names = {r.name for r in rows2}
+    assert names == {"new_name"}
+    assert "old_name" not in {r.name for r in await registry.list()}
+
+
 async def test_active_strategy_resolution(session: AsyncSession) -> None:
     registry = StrategyRegistryService(session, "strategies")
     await registry.scan()

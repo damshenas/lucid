@@ -36,8 +36,9 @@ class StrategyRegistryService:
 
     async def scan(self) -> list[StrategyRegistry]:
         self.invalidate()
+        discovered = self._discover()
         rows: list[StrategyRegistry] = []
-        for strategy in self._discover().values():
+        for strategy in discovered.values():
             rows.append(
                 await self._repo.upsert(
                     name=strategy.name,
@@ -48,6 +49,10 @@ class StrategyRegistryService:
                     description=strategy.description,
                 )
             )
+        # Reconcile away rows for strategies no longer discovered under that name —
+        # otherwise renaming a strategy's STRATEGY_NAME (file path unchanged) leaves
+        # the old name listed forever alongside the new one.
+        await self._repo.delete_missing(set(discovered.keys()))
         return rows
 
     async def list(self, direction: str | None = None) -> list[StrategyRegistry]:
