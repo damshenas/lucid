@@ -54,7 +54,20 @@ class GitSync:
         )
         stdout, stderr = await proc.communicate()
         if proc.returncode != 0:
-            raise GitError(stderr.decode().strip() or f"git {' '.join(args)} failed")
+            message = stderr.decode().strip() or f"git {' '.join(args)} failed"
+            if "permission denied" in message.lower():
+                # The checkout's files (e.g. .git/FETCH_HEAD, written on every pull)
+                # are owned by whatever host user ran `git clone`, not necessarily the
+                # container's non-root uid/gid (see docker/Dockerfile) — fix with
+                # `sudo bash docker/prepare.sh` (chowns EXT_STRATEGIES recursively too,
+                # see docs/deployment.md), re-run after (re)cloning.
+                message += (
+                    f" — {self._path} (or files inside it, e.g. .git/FETCH_HEAD) "
+                    "isn't owned/writable by the container's runtime user; re-run "
+                    "`sudo bash docker/prepare.sh` on the host after cloning/updating "
+                    "it out-of-band"
+                )
+            raise GitError(message)
         return stdout.decode().strip()
 
     async def sync(self) -> str:

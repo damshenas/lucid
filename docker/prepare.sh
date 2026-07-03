@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
-# One-time host preparation for rootless Podman on SELinux hosts.
-# Creates the data directory, chowns it to the container's subuid mapping
-# (100000 + 8686 - 1 = 108685), and applies the container SELinux label.
+# One-time (and re-run-safe) host preparation for rootless Podman on SELinux hosts.
+# Creates the data directory, chowns it (recursively) to the container's subuid
+# mapping (100000 + 8686 - 1 = 108685), and applies the container SELinux label.
+#
+# Re-run this any time after (re-)cloning/updating the EXT_STRATEGIES checkout
+# out-of-band (e.g. `git clone ... ${BASE_DIR}/ext-strategies` as your own host
+# user) — otherwise its files (owned by that host user, not the subuid mapping)
+# cause "Permission denied" writing .git/FETCH_HEAD when the app runs `git pull`.
 #
 # Usage: sudo bash docker/prepare.sh [BASE_DIR]
 set -euo pipefail

@@ -57,6 +57,23 @@ sudo bash docker/prepare.sh /container/lucid
 Creates the data directory, chowns it to the subuid mapping (108685), and applies the
 `container_file_t` SELinux label.
 
+### Algorithm git sync (optional)
+
+To enable the "Sync now" button (Settings > Service > Git Sync), clone the algorithm
+repo into `ext-strategies` yourself, with whatever remote/branch you want — the app
+only ever runs `git pull` in it, never a clone:
+
+```bash
+git clone --branch <branch> <repo-url> /container/lucid/ext-strategies
+sudo bash docker/prepare.sh /container/lucid   # re-chown — see below
+```
+
+Re-running `prepare.sh` is required after cloning (or any out-of-band `git`
+operation in that directory): its files are owned by whatever host user ran `git
+clone`, not the container's subuid-mapped runtime user, and the app's `git pull`
+fails with `Permission denied` writing `.git/FETCH_HEAD` until they're chowned to
+match.
+
 ## First run
 
 1. Open `http://<host>:8686/`.
