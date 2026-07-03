@@ -45,9 +45,15 @@ function SingleStrategyPanel({
       <Card>
         <div className="flex items-center justify-between gap-3">
           <div>
-            <p className="text-sm font-medium text-white/90">
-              Active {strategy.direction} strategy
-            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-sm font-medium text-white/90">
+                Active {strategy.direction} strategy
+              </p>
+              <Badge tone={strategy.direction === "buy" ? "cyan" : "rose"}>{strategy.direction}</Badge>
+              <Badge tone={strategy.is_builtin ? "violet" : "neutral"}>
+                {strategy.is_builtin ? "native" : "custom"}
+              </Badge>
+            </div>
             {strategy.description && <p className="text-sm text-white/50">{strategy.description}</p>}
           </div>
           <Toggle

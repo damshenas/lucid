@@ -78,9 +78,9 @@ export function Strategies() {
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="truncate font-semibold">{s.name}</span>
-                  <Badge tone={s.direction === "long" ? "cyan" : "rose"}>{s.direction}</Badge>
+                  <Badge tone={s.direction === "buy" ? "cyan" : "rose"}>{s.direction}</Badge>
                   <Badge tone={s.is_builtin ? "violet" : "neutral"}>
-                    {s.is_builtin ? "built-in" : "user"}
+                    {s.is_builtin ? "native" : "custom"}
                   </Badge>
                 </div>
                 <p className="mt-1 text-xs text-white/40">v{s.version ?? "—"}</p>
