@@ -12,7 +12,7 @@ import pytest
 from src.modules.com.barchart import BarchartConnector
 from src.modules.com.claude import ClaudeClient, DisabledConnectorError
 from src.modules.com.finviz import FinvizConnector
-from src.modules.com.git import GitSync, deploy_strategies, sync_and_deploy
+from src.modules.com.git import GitError, GitSync, deploy_strategies, sync_and_deploy
 from src.modules.com.telegram import TelegramClient
 from src.modules.com.tradingview import TradingViewConnector
 from src.modules.com.zacks import ZacksConnector
