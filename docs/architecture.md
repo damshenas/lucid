@@ -70,20 +70,26 @@ scheduler.run_strategies (per trader, per watchlist ticker)
 
 ## Algorithm git sync
 
-`com/git.GitSync` clones/pulls the configured repo (`git_sync.repo_url`, admin-only
-system setting) into `ALGORITHMS_ROOT` — a mounted volume, never executed from
-directly. Discovered `buy/`/`sell/` files are then copied into `STRATEGIES_ROOT`, the
-directory `modules/strategy/loader` actually scans:
+`STRATEGIES_ROOT` (what `modules/strategy/loader` actually scans) is a writable but
+ephemeral directory — a tmpfs mount in production, empty on every container start —
+merged from two sources, in order, every time the app starts and on every
+`git_sync.interval_minutes` tick:
+
+1. **Built-ins**: seeded from `BUILTIN_STRATEGIES_ROOT` (`/app/strategies`, baked into
+   the image, never mounted over) via `modules.strategy.seed_missing_strategies` —
+   copy-if-absent, so it never clobbers a file already deployed by step 2.
+2. **Git-synced**: `com/git.GitSync` clones/pulls the configured repo
+   (`git_sync.repo_url`, admin-only system setting) into `EXT_STRATEGIES` — a mounted
+   volume, never executed from directly — then `deploy_strategies` copies its
+   `buy/`/`sell/` files into `STRATEGIES_ROOT`, always overwriting on conflict.
 
 ```
-git repo ──sync──▶ ALGORITHMS_ROOT (staging, mounted volume)
-                        │ deploy_strategies() copies *.py
-                        ▼
-                  STRATEGIES_ROOT (served by the app)
+/app/strategies (built-in, image-baked) ──seed (copy-if-absent)──┐
+                                                                   ▼
+git repo ──sync──▶ EXT_STRATEGIES (staging, mounted volume) ──deploy (overwrite)──▶ STRATEGIES_ROOT (served by the app)
 ```
 
 This runs once at container startup (`src/scripts/sync_algorithms.py`, invoked from
-`docker/entrypoint.sh` before the app starts — the mounted volume may have received
-newer pulls since the image was built) and again on `git_sync.interval_minutes` via the
-scheduler, so the app never runs code straight out of the staging mount.
-```
+`docker/entrypoint.sh` before the app starts) and again on `git_sync.interval_minutes`
+via the scheduler, so the app never runs code straight out of the image layer or the
+staging mount — only out of the merged `STRATEGIES_ROOT`.

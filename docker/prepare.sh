@@ -10,7 +10,7 @@ BASE_DIR="${1:-/container/lucid}"
 SUBUID=108685  # 100000 + 8686 - 1
 
 echo "Preparing ${BASE_DIR} ..."
-mkdir -p "${BASE_DIR}/data" "${BASE_DIR}/algorithms" "${BASE_DIR}/strategies"
+mkdir -p "${BASE_DIR}/data" "${BASE_DIR}/ext-strategies"
 chown -R "${SUBUID}:${SUBUID}" "${BASE_DIR}"
 
 if command -v chcon >/dev/null 2>&1; then
@@ -18,4 +18,5 @@ if command -v chcon >/dev/null 2>&1; then
     chcon -Rt container_file_t "${BASE_DIR}" || true
 fi
 
-echo "Done. Mount ${BASE_DIR}/data at /data, ${BASE_DIR}/algorithms at /algorithms, ${BASE_DIR}/strategies at /app/strategies."
+echo "Done. Mount ${BASE_DIR}/data at /data, ${BASE_DIR}/ext-strategies at /ext_strategies."
+echo "(STRATEGIES_ROOT itself is a tmpfs path — no host directory needed for it.)"

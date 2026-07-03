@@ -1,12 +1,18 @@
-"""One-shot startup sync: pull the algorithm repo into the staging mount and deploy.
+"""One-shot startup sync: seed built-in strategies, then pull the algorithm repo into
+the staging mount and deploy.
 
-Run by ``docker/entrypoint.sh`` after migrations but before the app starts, so a
-freshly mounted ``ALGORITHMS_ROOT`` volume's latest pulls land in ``STRATEGIES_ROOT``
-before the app's lifespan scans strategies. The app never runs code directly out of
-the staging mount — see ``src.modules.com.git.deploy_strategies``.
+Run by ``docker/entrypoint.sh`` after migrations but before the app starts.
+``STRATEGIES_ROOT`` is a writable-but-ephemeral directory (a tmpfs mount in
+production, see docker/compose.yml) that starts empty on every container start, so
+this always: (1) seeds it from the image's baked-in ``BUILTIN_STRATEGIES_ROOT``
+(``/app/strategies`` — never mounted over, always available), then (2) if git sync is
+configured, pulls the repo into the ``EXT_STRATEGIES`` staging mount and copies its
+``buy``/``sell`` files on top. The app only ever scans ``STRATEGIES_ROOT`` — it never
+runs code directly out of ``EXT_STRATEGIES`` — see ``src.modules.com.git.deploy_strategies``.
 
-No-op (with a log line) when ``git_sync.enabled`` is false or no ``repo_url`` is
-configured. Safe to run without a reachable database (falls back to ``default.yml``).
+The git-sync portion is a no-op (with a log line) when ``git_sync.enabled`` is false
+or no ``repo_url`` is configured. Safe to run without a reachable database (falls
+back to ``default.yml``).
 """
 
 from __future__ import annotations
@@ -24,7 +30,7 @@ _logger = get_logger("scripts.sync_algorithms")
 
 _DEFAULT_CONFIG_PATH = "src/conf/default.yml"
 _DEFAULT_STRATEGIES_ROOT = "strategies"
-_DEFAULT_ALGORITHMS_ROOT = "algorithms"
+_DEFAULT_EXT_STRATEGIES_ROOT = "ext_strategies"
 
 
 async def _load_git_config(config_defaults: dict) -> dict:
@@ -49,19 +55,19 @@ async def main() -> None:
     config_defaults = load_default_config(os.environ.get("CONFIG_PATH", _DEFAULT_CONFIG_PATH))
     git_cfg = await _load_git_config(config_defaults)
 
-    algorithms_root = os.environ.get("ALGORITHMS_ROOT", _DEFAULT_ALGORITHMS_ROOT)
+    ext_strategies_root = os.environ.get("EXT_STRATEGIES", _DEFAULT_EXT_STRATEGIES_ROOT)
     strategies_root = os.environ.get("STRATEGIES_ROOT", _DEFAULT_STRATEGIES_ROOT)
 
-    # STRATEGIES_ROOT may be a freshly-mounted, initially-empty writable volume (needed
-    # so the git-sync deploy target isn't the read-only image layer). Seed it from the
-    # image's baked-in built-in strategies first, without ever overwriting a file the
-    # mount already has (a prior git sync always wins on conflict).
+    # STRATEGIES_ROOT is a writable-but-ephemeral directory (tmpfs in production —
+    # empty on every container start) so the git-sync deploy target is never the
+    # read-only image layer. Seed it from the image's baked-in built-in strategies
+    # first, without ever overwriting a file already there (a git sync always wins
+    # on conflict, since it runs after this).
     #
-    # This whole step is best-effort: a misconfigured/unwritable mount (wrong host
-    # ownership — see docker/prepare.sh) must never prevent the app from starting.
-    # Worst case the app boots with whatever strategies already exist at
-    # STRATEGIES_ROOT (possibly none, discoverable/fixable via POST
-    # /api/v1/strategies/scan once the mount is fixed), rather than not booting at all.
+    # This whole step is best-effort: an unwritable STRATEGIES_ROOT must never
+    # prevent the app from starting. Worst case the app boots with whatever
+    # strategies already exist there (possibly none, discoverable/fixable via POST
+    # /api/v1/strategies/scan once fixed), rather than not booting at all.
     builtin_root = os.environ.get("BUILTIN_STRATEGIES_ROOT", _DEFAULT_STRATEGIES_ROOT)
     try:
         seeded = seed_missing_strategies(builtin_root, strategies_root)
@@ -69,8 +75,8 @@ async def main() -> None:
             _logger.info("seeded %d built-in strategy file(s) into %s", len(seeded), strategies_root)
     except OSError as exc:
         _logger.error(
-            "could not seed built-in strategies into %s — check that the mounted "
-            "volume is writable by this container's user (see docker/prepare.sh): %s",
+            "could not seed built-in strategies into %s — check that STRATEGIES_ROOT "
+            "is writable (see docker/compose.yml's tmpfs mounts): %s",
             strategies_root,
             exc,
         )
@@ -83,7 +89,7 @@ async def main() -> None:
         commit, copied = await sync_and_deploy(
             repo_url=git_cfg["repo_url"],
             branch=git_cfg.get("branch", "main"),
-            staging_root=algorithms_root,
+            staging_root=ext_strategies_root,
             target_root=strategies_root,
         )
     except (GitError, OSError) as exc:

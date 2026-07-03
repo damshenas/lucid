@@ -76,7 +76,7 @@ async def test_git_sync(tmp_path: Path) -> None:
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not available")
 async def test_git_sync_and_deploy_never_runs_from_staging(tmp_path: Path) -> None:
     """The app must load strategies from ``target_root``, never straight from the
-    ``ALGORITHMS_ROOT`` staging clone."""
+    ``EXT_STRATEGIES`` staging clone."""
     origin = tmp_path / "origin"
     origin.mkdir()
     subprocess.run(["git", "init", "-q", "-b", "main"], cwd=origin, check=True)

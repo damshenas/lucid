@@ -51,7 +51,7 @@ class ScheduleConfig(BaseModel):
 class GitSyncConfig(BaseModel):
     """System-level (admin-only) config for syncing algorithm files from a git repo.
 
-    ``repo_url`` is cloned/pulled into the ``ALGORITHMS_ROOT`` staging directory (a
+    ``repo_url`` is cloned/pulled into the ``EXT_STRATEGIES`` staging directory (a
     mounted volume), then discovered ``buy``/``sell`` strategy files are copied into
     ``STRATEGIES_ROOT`` — the app never runs code directly out of the staging mount.
     """

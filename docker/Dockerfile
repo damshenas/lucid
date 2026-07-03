@@ -42,12 +42,12 @@ RUN apt-get update \
 
 COPY pyproject.toml README.md ./
 COPY src ./src
+# This is the immutable, always-available source of built-in strategies
+# (BUILTIN_STRATEGIES_ROOT in production — see docker/compose.yml). STRATEGIES_ROOT
+# itself is a separate, writable-but-ephemeral tmpfs path at runtime, seeded from here
+# by src/scripts/sync_algorithms.py at every container start — this directory is
+# never bind-mounted over.
 COPY strategies ./strategies
-# Second, immutable copy at a path the runtime never bind-mounts over. STRATEGIES_ROOT
-# (./strategies) is mounted read-write in production so the git-sync deploy step
-# (src/scripts/sync_algorithms.py) can write into it; a fresh/empty mount would
-# otherwise hide these built-ins, so they get seeded back in from here at startup.
-COPY strategies ./strategies.builtin
 COPY alembic ./alembic
 COPY alembic.ini ./
 COPY tests ./tests

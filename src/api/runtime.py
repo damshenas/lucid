@@ -145,7 +145,7 @@ class TradingRuntime:
     async def _git_sync(self) -> None:
         """Pull the algorithm repo into the staging mount, then deploy into strategies.
 
-        The staging mount (``ALGORITHMS_ROOT``) is never executed from directly; only
+        The staging mount (``EXT_STRATEGIES``) is never executed from directly; only
         files copied into ``STRATEGIES_ROOT`` by ``deploy_strategies`` are loaded.
         """
         async with self.ctx.db.session() as session:
@@ -156,7 +156,7 @@ class TradingRuntime:
         commit, copied = await sync_and_deploy(
             repo_url=git_cfg["repo_url"],
             branch=git_cfg.get("branch", "main"),
-            staging_root=self.ctx.algorithms_root,
+            staging_root=self.ctx.ext_strategies_root,
             target_root=self.ctx.strategies_root,
         )
         if copied:

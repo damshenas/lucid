@@ -39,7 +39,7 @@ _logger = get_logger("api.context")
 _DEFAULT_SQLITE = "sqlite+aiosqlite:///:memory:"
 _DEFAULT_CONFIG_PATH = "src/conf/default.yml"
 _DEFAULT_STRATEGIES_ROOT = "strategies"
-_DEFAULT_ALGORITHMS_ROOT = "algorithms"
+_DEFAULT_EXT_STRATEGIES_ROOT = "ext_strategies"
 
 
 @dataclass
@@ -52,7 +52,7 @@ class AppContext:
     bus: EventBus
     broker_registry: BrokerRegistry
     strategies_root: str
-    algorithms_root: str
+    ext_strategies_root: str
 
     @property
     def is_sqlite(self) -> bool:
@@ -105,7 +105,7 @@ class AppContext:
         database_url: str | None = None,
         config_path: str = _DEFAULT_CONFIG_PATH,
         strategies_root: str | None = None,
-        algorithms_root: str | None = None,
+        ext_strategies_root: str | None = None,
     ) -> AppContext:
         database_url = database_url or os.environ.get("DATABASE_URL")
         if not database_url:
@@ -115,8 +115,8 @@ class AppContext:
         strategies_root = strategies_root or os.environ.get(
             "STRATEGIES_ROOT", _DEFAULT_STRATEGIES_ROOT
         )
-        algorithms_root = algorithms_root or os.environ.get(
-            "ALGORITHMS_ROOT", _DEFAULT_ALGORITHMS_ROOT
+        ext_strategies_root = ext_strategies_root or os.environ.get(
+            "EXT_STRATEGIES", _DEFAULT_EXT_STRATEGIES_ROOT
         )
 
         jwt_secret = os.environ.get("LUCID_JWT_SECRET")
@@ -157,5 +157,5 @@ class AppContext:
             bus=EventBus(),
             broker_registry=broker_registry,
             strategies_root=strategies_root,
-            algorithms_root=algorithms_root,
+            ext_strategies_root=ext_strategies_root,
         )

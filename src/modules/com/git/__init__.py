@@ -1,7 +1,7 @@
 """Git sync for strategy files.
 
 Pulls a strategy repository into a staging directory (``local_path`` — a mounted
-volume, e.g. ``ALGORITHMS_ROOT``) so new ``buy``/``sell`` files appear without manual
+volume, e.g. ``EXT_STRATEGIES``) so new ``buy``/``sell`` files appear without manual
 upload. The app never runs code directly out of that staging mount: ``deploy_strategies``
 copies the discovered files into the real strategies directory (``STRATEGIES_ROOT``)
 afterwards. Uses the ``git`` CLI via asyncio subprocess (no extra dependency). The
