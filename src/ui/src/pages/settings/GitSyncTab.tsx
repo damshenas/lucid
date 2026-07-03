@@ -12,11 +12,15 @@ interface Props {
   readOnly: boolean;
 }
 
-/** Git Sync tab: the `enabled` toggle (schema-driven, saved via the usual "Save
- * changes" button) plus a "Sync now" button that pulls EXT_STRATEGIES (an
- * already-cloned git checkout — its remote/branch is configured out-of-band on the
- * host, not here) and deploys new strategy files. On-demand only — there is no
- * recurring schedule; see POST /api/v1/admin/git-sync. */
+/** Git Sync tab: a "Sync now" button that pulls EXT_STRATEGIES (an already-cloned git
+ * checkout — its remote/branch is configured out-of-band on the host, not here) and
+ * deploys new strategy files, plus the `enabled` toggle that only controls whether
+ * this also runs automatically once at container startup.
+ *
+ * "Sync now" always works regardless of `enabled` and regardless of whether pending
+ * `edited` changes have been saved yet — clicking it is itself the admin's consent,
+ * it must never depend on a separate setting having been saved first via the page's
+ * shared "Save changes" button (see POST /api/v1/admin/git-sync). */
 export function GitSyncTab({ gitSyncNode, edited, onChange, readOnly }: Props) {
   const [syncing, setSyncing] = useState(false);
   const [result, setResult] = useState<{ text: string; tone: "success" | "error" } | null>(null);
@@ -42,8 +46,6 @@ export function GitSyncTab({ gitSyncNode, edited, onChange, readOnly }: Props) {
 
   return (
     <div className="space-y-4">
-      <SchemaGroup node={gitSyncNode} edited={edited} onChange={onChange} readOnly={readOnly} />
-
       <Card>
         <div className="space-y-3">
           <div>
@@ -53,7 +55,8 @@ export function GitSyncTab({ gitSyncNode, edited, onChange, readOnly }: Props) {
               up on the host) and deploys any new or updated{" "}
               <code className="mx-1 rounded bg-white/10 px-1 py-0.5">buy/</code>
               and <code className="mx-1 rounded bg-white/10 px-1 py-0.5">sell/</code>
-              files. On-demand only — there is no recurring schedule.
+              files. On-demand only — always runs immediately when clicked, whether or
+              not "Enabled" below is turned on or saved.
             </p>
           </div>
           <Button variant="secondary" onClick={syncNow} disabled={syncing}>
@@ -72,6 +75,13 @@ export function GitSyncTab({ gitSyncNode, edited, onChange, readOnly }: Props) {
           )}
         </div>
       </Card>
+
+      <p className="text-sm text-white/50">
+        "Enabled" below only controls whether this also runs automatically once at
+        container startup — remember to hit the page's "Save changes" button for it to
+        take effect.
+      </p>
+      <SchemaGroup node={gitSyncNode} edited={edited} onChange={onChange} readOnly={readOnly} />
     </div>
   );
 }

@@ -16,9 +16,9 @@ strategy:
   # StrategyConfig docstring.
 
 git_sync:
-  enabled: false                # pulls EXT_STRATEGIES (an already-cloned git checkout)
-                                 # and deploys its buy/sell files; on-demand only, via
-                                 # POST /api/v1/admin/git-sync (also runs once at startup)
+  enabled: false                # gates only the automatic sync at container startup;
+                                 # the on-demand "Sync now" button (POST
+                                 # /api/v1/admin/git-sync) always works regardless
 
 schedule:
   task_timeout_seconds: 300

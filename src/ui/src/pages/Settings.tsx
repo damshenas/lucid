@@ -53,14 +53,18 @@ export function Settings() {
   }
 
   useEffect(() => {
-    api
-      .settingsSchema()
-      .then(setSchema)
-      .catch((e) => setStatus({ text: (e as Error).message, tone: "error" }));
+    refreshSchema();
     // Every discovered strategy (active or not) — lets the Strategy tab show a
     // sub-tab per available strategy, not only whichever one is already active.
     refreshStrategies();
   }, []);
+
+  function refreshSchema() {
+    return api
+      .settingsSchema()
+      .then(setSchema)
+      .catch((e) => setStatus({ text: (e as Error).message, tone: "error" }));
+  }
 
   useEffect(() => {
     if (!status) return;
@@ -84,6 +88,10 @@ export function Settings() {
     try {
       await api.saveSettings(edited);
       setEdited({});
+      // Refetch so `field.value` reflects what was just persisted — without this,
+      // switching tabs (which doesn't remount this page) re-renders from the stale
+      // schema fetched at mount and saved changes look reverted until a hard refresh.
+      await refreshSchema();
       setStatus({ text: "Saved.", tone: "success" });
     } catch (e) {
       setStatus({ text: (e as Error).message, tone: "error" });

@@ -14,7 +14,7 @@ from src.modules.db.repositories.price import PriceFetchLogRepository, PriceWatc
 from src.modules.db.repositories.position import PositionRepository
 from src.modules.db.repositories.user import UserRepository
 from src.modules.com import yahoofinance
-from src.modules.com.git import GitError, sync_and_deploy
+from src.modules.com.git import sync_and_deploy
 from src.modules.execution import ExecutionEngine
 from src.modules.logger import get_logger
 from src.modules.price import storage
@@ -146,14 +146,14 @@ class TradingRuntime:
         """Pull the already-cloned ``EXT_STRATEGIES`` checkout, then deploy into strategies.
 
         On-demand only (triggered by an admin via ``POST /api/v1/admin/git-sync``) —
-        there is no recurring schedule. The staging mount (``EXT_STRATEGIES``) is never
-        executed from directly; only files copied into ``STRATEGIES_ROOT`` by
+        there is no recurring schedule, and unlike the startup sync this ignores
+        ``git_sync.enabled`` (that flag only gates the automatic startup sync in
+        ``src/scripts/sync_algorithms.py``): clicking the button is itself the
+        admin's explicit consent, so it must not depend on a separate setting having
+        been saved first. The staging mount (``EXT_STRATEGIES``) is never executed
+        from directly; only files copied into ``STRATEGIES_ROOT`` by
         ``deploy_strategies`` are loaded.
         """
-        async with self.ctx.db.session() as session:
-            values = await self.ctx.config_service(session).compile_values()
-        if not values.get("git_sync", {}).get("enabled"):
-            raise GitError("git sync is disabled — enable it in Settings first")
         commit, copied = await sync_and_deploy(
             staging_root=self.ctx.ext_strategies_root,
             target_root=self.ctx.strategies_root,
