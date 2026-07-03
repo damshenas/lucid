@@ -11,7 +11,6 @@ from src.modules.strategy.context import StrategyContext
 
 STRATEGY_NAME = "trend_follow"
 STRATEGY_VERSION = "1.0.0"
-STRATEGY_BUILTIN = True
 STRATEGY_DESCRIPTION = "Buy in an uptrend (SMA50 > SMA200) while RSI is below the cap."
 
 CONFIG_SCHEMA = {

@@ -12,7 +12,6 @@ from src.modules.strategy.context import StrategyContext
 
 STRATEGY_NAME = "trailing_stop"
 STRATEGY_VERSION = "1.0.0"
-STRATEGY_BUILTIN = True
 STRATEGY_DESCRIPTION = "ATR trailing stop plus profit taking at a configurable level."
 
 CONFIG_SCHEMA = {

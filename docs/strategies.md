@@ -15,7 +15,13 @@ async def run(context) -> BuySignalEvent | None   # in strategies/buy/
 async def run(context) -> SellSignalEvent | None  # in strategies/sell/
 ```
 
-Optional module attributes: `STRATEGY_DESCRIPTION: str`, `STRATEGY_BUILTIN: bool`.
+Optional module attributes: `STRATEGY_DESCRIPTION: str`.
+
+"Native" vs "custom" (shown as a tag in the UI) is derived automatically from actual
+file origin, not a self-declared flag: a file only counts as native if it's
+byte-identical to the one shipped in `BUILTIN_STRATEGIES_ROOT`. Anything a git sync
+deploys into `STRATEGIES_ROOT` — including a same-named override of a built-in — is
+"custom", since the deploy step always overwrites on conflict.
 
 ## StrategyContext
 
@@ -40,7 +46,6 @@ from src.modules.strategy.context import StrategyContext
 
 STRATEGY_NAME = "trend_follow"
 STRATEGY_VERSION = "1.0.0"
-STRATEGY_BUILTIN = True
 CONFIG_SCHEMA = {"rsi_max": {"type": "float", "default": 70.0, "required": False}}
 
 

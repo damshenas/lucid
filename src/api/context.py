@@ -53,6 +53,7 @@ class AppContext:
     broker_registry: BrokerRegistry
     strategies_root: str
     ext_strategies_root: str
+    builtin_strategies_root: str
 
     @property
     def is_sqlite(self) -> bool:
@@ -67,7 +68,7 @@ class AppContext:
         return CredentialManager(session, self.encryptor)
 
     def strategy_service(self, session) -> StrategyRegistryService:
-        return StrategyRegistryService(session, self.strategies_root)
+        return StrategyRegistryService(session, self.strategies_root, self.builtin_strategies_root)
 
     async def resolve_broker(self, session, user_id: int, asset_class: str) -> Broker:
         values = await self.config_service(session).compile_values(
@@ -106,6 +107,7 @@ class AppContext:
         config_path: str = _DEFAULT_CONFIG_PATH,
         strategies_root: str | None = None,
         ext_strategies_root: str | None = None,
+        builtin_strategies_root: str | None = None,
     ) -> AppContext:
         database_url = database_url or os.environ.get("DATABASE_URL")
         if not database_url:
@@ -117,6 +119,13 @@ class AppContext:
         )
         ext_strategies_root = ext_strategies_root or os.environ.get(
             "EXT_STRATEGIES", _DEFAULT_EXT_STRATEGIES_ROOT
+        )
+        # Used only to tell "native" (byte-identical to the image-baked source) apart
+        # from "custom" (anything git-sync deployed, see modules.strategy.loader);
+        # defaults to strategies_root itself when unset, so dev/tests (no separate
+        # image layer) trivially treat every discovered file as native.
+        builtin_strategies_root = builtin_strategies_root or os.environ.get(
+            "BUILTIN_STRATEGIES_ROOT", strategies_root
         )
 
         jwt_secret = os.environ.get("LUCID_JWT_SECRET")
@@ -158,4 +167,5 @@ class AppContext:
             broker_registry=broker_registry,
             strategies_root=strategies_root,
             ext_strategies_root=ext_strategies_root,
+            builtin_strategies_root=builtin_strategies_root,
         )

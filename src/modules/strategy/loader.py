@@ -1,7 +1,7 @@
 """Discover and load single-file strategies from ``strategies/buy`` and ``strategies/sell``.
 
 Each strategy file must export ``STRATEGY_NAME``, ``STRATEGY_VERSION``, ``CONFIG_SCHEMA``
-and an ``async def run(context)``. Optional: ``STRATEGY_DESCRIPTION``, ``STRATEGY_BUILTIN``.
+and an ``async def run(context)``. Optional: ``STRATEGY_DESCRIPTION``.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ def _require(module: ModuleType, attr: str, path: Path) -> Any:
     return getattr(module, attr)
 
 
-def load_strategy_file(path: Path, direction: str) -> LoadedStrategy:
+def load_strategy_file(path: Path, direction: str, builtin_root: str | Path | None = None) -> LoadedStrategy:
     module_name = f"lucid_strategy_{direction}_{path.stem}"
     spec = importlib.util.spec_from_file_location(module_name, path)
     if spec is None or spec.loader is None:
@@ -69,7 +69,7 @@ def load_strategy_file(path: Path, direction: str) -> LoadedStrategy:
         version=str(_require(module, "STRATEGY_VERSION", path)),
         direction=direction,
         file_path=f"strategies/{direction}/{path.name}",
-        is_builtin=bool(getattr(module, "STRATEGY_BUILTIN", False)),
+        is_builtin=_is_builtin_file(path, direction, builtin_root),
         description=getattr(module, "STRATEGY_DESCRIPTION", None),
         config_schema=dict(_require(module, "CONFIG_SCHEMA", path)),
         run=run,
@@ -77,7 +77,36 @@ def load_strategy_file(path: Path, direction: str) -> LoadedStrategy:
     )
 
 
-def discover_strategies(strategies_root: str | Path) -> list[LoadedStrategy]:
+def _is_builtin_file(path: Path, direction: str, builtin_root: str | Path | None) -> bool:
+    """"Native" vs "custom" is derived from actual file origin, not a self-declared
+    flag in the strategy file (which a git-synced file could set just as easily as a
+    real built-in) — a file only counts as native if it's byte-identical to the one
+    shipped in ``BUILTIN_STRATEGIES_ROOT``. Anything git-sync deployed into
+    ``STRATEGIES_ROOT`` — including an override that reuses a built-in's filename — is
+    "custom", since ``deploy_strategies`` always overwrites on conflict.
+    """
+    if builtin_root is None:
+        return False
+    candidate = Path(builtin_root) / direction / path.name
+    if not candidate.is_file():
+        return False
+    if candidate.resolve() == path.resolve():
+        return True
+    try:
+        return candidate.read_bytes() == path.read_bytes()
+    except OSError:
+        return False
+
+
+def discover_strategies(
+    strategies_root: str | Path, builtin_root: str | Path | None = None
+) -> list[LoadedStrategy]:
+    # Defaults to strategies_root itself when no separate built-in source is given
+    # (e.g. local dev/tests with no separate baked-in image layer) — every discovered
+    # file then trivially compares equal to itself and counts as native. In
+    # production these differ (see AppContext: STRATEGIES_ROOT vs
+    # BUILTIN_STRATEGIES_ROOT), making the comparison meaningful.
+    builtin_root = strategies_root if builtin_root is None else builtin_root
     root = Path(strategies_root)
     loaded: list[LoadedStrategy] = []
     for direction in _DIRECTIONS:
@@ -87,7 +116,7 @@ def discover_strategies(strategies_root: str | Path) -> list[LoadedStrategy]:
         for path in sorted(directory.glob("*.py")):
             if path.name.startswith("_"):
                 continue
-            loaded.append(load_strategy_file(path, direction))
+            loaded.append(load_strategy_file(path, direction, builtin_root))
     return loaded
 
 

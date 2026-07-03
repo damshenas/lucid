@@ -37,6 +37,34 @@ def test_seed_missing_strategies_noop_when_same_path(tmp_path: Path) -> None:
     assert seed_missing_strategies(tmp_path, tmp_path) == []
 
 
+def test_is_builtin_derived_from_file_origin_not_self_declared(tmp_path: Path) -> None:
+    """"Native" vs "custom" must reflect actual file origin (byte-identical to
+    BUILTIN_STRATEGIES_ROOT), not any flag the strategy file itself could set —
+    a git-synced ("custom") file overriding a built-in's filename must show as
+    custom, and an unmodified copy of it must show as native."""
+    builtin_root = tmp_path / "builtin"
+    runtime_root = tmp_path / "runtime"
+    (builtin_root / "buy").mkdir(parents=True)
+    (runtime_root / "buy").mkdir(parents=True)
+
+    native_src = "STRATEGY_NAME='a'\nSTRATEGY_VERSION='1'\nCONFIG_SCHEMA={}\nasync def run(context): return None\n"
+    (builtin_root / "buy" / "a.py").write_text(native_src)
+    (runtime_root / "buy" / "a.py").write_text(native_src)  # untouched copy -> native
+    # a distinct, git-sync-only strategy — not present in builtin_root at all
+    (runtime_root / "buy" / "b.py").write_text(native_src.replace("'a'", "'b'"))
+
+    loaded = {s.name: s for s in discover_strategies(runtime_root, builtin_root)}
+    assert loaded["a"].is_builtin is True
+    assert loaded["b"].is_builtin is False  # not present in builtin_root at all
+
+    # Now simulate a git-sync deploy overwriting "a" with different content —
+    # deploy_strategies always overwrites on conflict, so this is exactly what
+    # STRATEGIES_ROOT looks like after an admin's algorithm repo redefines it.
+    (runtime_root / "buy" / "a.py").write_text(native_src.replace("VERSION='1'", "VERSION='2'"))
+    loaded2 = {s.name: s for s in discover_strategies(runtime_root, builtin_root)}
+    assert loaded2["a"].is_builtin is False
+
+
 async def test_scan_upserts_registry(session: AsyncSession) -> None:
     registry = StrategyRegistryService(session, "strategies")
     rows = await registry.scan()

@@ -21,14 +21,24 @@ def build_extra_sections(
 
 
 class StrategyRegistryService:
-    def __init__(self, session: AsyncSession, strategies_root: str) -> None:
+    def __init__(
+        self, session: AsyncSession, strategies_root: str, builtin_strategies_root: str | None = None
+    ) -> None:
         self._repo = StrategyRepository(session)
         self._root = strategies_root
+        # Defaults to strategies_root itself (matches dev/tests, where there's no
+        # separate baked-in image layer — every discovered file is trivially "native"
+        # since it's compared against itself). In production these differ:
+        # STRATEGIES_ROOT is the merged runtime dir, BUILTIN_STRATEGIES_ROOT the
+        # immutable image-baked one (see AppContext).
+        self._builtin_root = builtin_strategies_root or strategies_root
         self._cache: dict[str, LoadedStrategy] | None = None
 
     def _discover(self) -> dict[str, LoadedStrategy]:
         if self._cache is None:
-            self._cache = {s.name: s for s in discover_strategies(self._root)}
+            self._cache = {
+                s.name: s for s in discover_strategies(self._root, self._builtin_root)
+            }
         return self._cache
 
     def invalidate(self) -> None:
