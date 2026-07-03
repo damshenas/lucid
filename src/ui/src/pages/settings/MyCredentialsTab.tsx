@@ -14,7 +14,14 @@ interface Status {
  * system defaults via "use default credentials" (see modules/encryption/credentials.py).
  * Grouped by platform (Trading212, and whatever's added later) so every platform
  * lives in this one tab instead of getting its own. */
-export function MyCredentialsTab() {
+interface Props {
+  /** Restrict to one platform (e.g. embedded inside Broker > Trading212). */
+  platform?: string;
+  /** Hide the "use default credentials" explainer when embedded elsewhere with its own context. */
+  compact?: boolean;
+}
+
+export function MyCredentialsTab({ platform, compact = false }: Props = {}) {
   const [useDefault, setUseDefault] = useState(false);
   const [items, setItems] = useState<CredentialCatalogItem[]>([]);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -69,10 +76,12 @@ export function MyCredentialsTab() {
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className="text-sm font-medium text-white/90">Use system default credentials</p>
-            <p className="text-sm text-white/50">
-              When enabled, your own credentials below are ignored in favor of the
-              admin-configured platform defaults.
-            </p>
+            {!compact && (
+              <p className="text-sm text-white/50">
+                When enabled, your own credentials below are ignored in favor of the
+                admin-configured platform defaults.
+              </p>
+            )}
           </div>
           <Toggle
             checked={useDefault}
@@ -101,6 +110,7 @@ export function MyCredentialsTab() {
         savingKey={savingKey}
         onDraftChange={(key, value) => setDrafts((prev) => ({ ...prev, [key]: value }))}
         onSave={save}
+        platform={platform}
       />
     </div>
   );

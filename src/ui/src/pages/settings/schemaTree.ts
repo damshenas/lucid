@@ -59,6 +59,19 @@ export function buildSchemaTree(schema: SettingsSchema): Record<string, GroupNod
  */
 export const SETTINGS_SECTION_ORDER = ["execution", "strategy", "schedule", "price", "broker"];
 
+/**
+ * Broker platforms available as nested tabs under "Broker" (see pages/Settings.tsx).
+ * Fixed/hardcoded (not derived from the credential catalog fetch) for the same
+ * flicker-avoidance reason as SETTINGS_SECTION_ORDER — `id` must match the
+ * `broker.broker_name` value used to select the active broker.
+ */
+export interface BrokerPlatform {
+  id: string;
+  label: string;
+}
+
+export const BROKER_PLATFORMS: BrokerPlatform[] = [{ id: "trading212", label: "Trading212" }];
+
 export function humanize(name: string): string {
   return name
     .split(/[_.]/)

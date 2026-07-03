@@ -5,12 +5,12 @@ import { Tabs, type TabDef } from "../components/ui/Tabs";
 import { useAuth } from "../hooks/useAuth";
 import { hasPermission } from "../lib/permissions";
 import type { Role } from "../lib/permissions";
-import type { SettingsSchema } from "../types";
-import { MyCredentialsTab } from "./settings/MyCredentialsTab";
-import { SchemaGroup, type StrategyOptions } from "./settings/SchemaGroup";
-import { SETTINGS_SECTION_ORDER, buildSchemaTree, emptyGroup, humanize } from "./settings/schemaTree";
+import type { SettingsSchema, Strategy } from "../types";
+import { BrokerPlatformPanel } from "./settings/BrokerPlatformPanel";
+import { SchemaGroup } from "./settings/SchemaGroup";
+import { BROKER_PLATFORMS, SETTINGS_SECTION_ORDER, buildSchemaTree, emptyGroup, humanize } from "./settings/schemaTree";
 import { SecurityTab } from "./settings/SecurityTab";
-import { SystemCredentialsTab } from "./settings/SystemCredentialsTab";
+import { StrategyTab } from "./settings/StrategyTab";
 
 interface Status {
   text: string;
@@ -44,7 +44,7 @@ export function Settings() {
   const canCredentials = hasPermission(role, "edit_own_credentials");
 
   const [schema, setSchema] = useState<SettingsSchema>({});
-  const [strategyOptions, setStrategyOptions] = useState<StrategyOptions>({ buy: [], sell: [] });
+  const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [edited, setEdited] = useState<Record<string, unknown>>({});
   const [status, setStatus] = useState<Status | null>(null);
   const [saving, setSaving] = useState(false);
@@ -54,14 +54,11 @@ export function Settings() {
       .settingsSchema()
       .then(setSchema)
       .catch((e) => setStatus({ text: (e as Error).message, tone: "error" }));
+    // Every discovered strategy (active or not) — lets the Strategy tab show a
+    // sub-tab per available strategy, not only whichever one is already active.
     api
       .strategies()
-      .then((list) =>
-        setStrategyOptions({
-          buy: list.filter((s) => s.direction === "buy").map((s) => s.name),
-          sell: list.filter((s) => s.direction === "sell").map((s) => s.name),
-        }),
-      )
+      .then(setStrategies)
       .catch(() => {});
   }, []);
 
@@ -102,30 +99,57 @@ export function Settings() {
         edited={edited}
         onChange={onFieldChange}
         readOnly={!canWriteSection(role, name)}
-        strategyOptions={strategyOptions}
       />
     ) : (
       <p className="py-6 text-center text-sm text-white/40">Loading…</p>
     );
   }
 
-  // Broker: its own settings plus the platform credentials for it, nested together.
-  const brokerTabs: TabDef[] = [{ id: "broker-settings", label: "Settings", content: schemaTab("broker") }];
-  if (canSystem) {
-    brokerTabs.push({ id: "credentials", label: "Credentials", content: <SystemCredentialsTab /> });
-  }
-  if (canCredentials) {
-    brokerTabs.push({ id: "my-credentials", label: "My Credentials", content: <MyCredentialsTab /> });
-  }
+  // Broker: one nested tab per platform, each showing whether it's active, paper
+  // mode, and that platform's own credentials all together (not split across
+  // separate "Settings"/"Credentials" sub-tabs).
+  const brokerTabs: TabDef[] = BROKER_PLATFORMS.map((platform) => ({
+    id: platform.id,
+    label: platform.label,
+    content: schemaLoaded ? (
+      <BrokerPlatformPanel
+        platform={platform}
+        brokerNode={tree.broker ?? emptyGroup()}
+        edited={edited}
+        onChange={onFieldChange}
+        readOnly={!canWriteSection(role, "broker")}
+        canSystem={canSystem}
+        canCredentials={canCredentials}
+      />
+    ) : (
+      <p className="py-6 text-center text-sm text-white/40">Loading…</p>
+    ),
+  }));
 
   // Fixed tab list — order and presence never change across renders (aside from the
   // role-gated sub-tabs, which depend only on `role`, resolved synchronously at mount),
   // so the tab bar never reshuffles or flickers while the schema loads.
-  const tabs: TabDef[] = SETTINGS_SECTION_ORDER.map((name) =>
-    name === "broker"
-      ? { id: "broker", label: "Broker", content: <NestedTabs tabs={brokerTabs} /> }
-      : { id: name, label: humanize(name), content: schemaTab(name) },
-  );
+  const tabs: TabDef[] = SETTINGS_SECTION_ORDER.map((name) => {
+    if (name === "broker") {
+      return { id: "broker", label: "Broker", content: <NestedTabs tabs={brokerTabs} /> };
+    }
+    if (name === "strategy") {
+      return {
+        id: "strategy",
+        label: "Strategy",
+        content: (
+          <StrategyTab
+            strategyNode={tree.strategy ?? emptyGroup()}
+            strategies={strategies}
+            edited={edited}
+            onChange={onFieldChange}
+            readOnly={!canWriteSection(role, "strategy")}
+          />
+        ),
+      };
+    }
+    return { id: name, label: humanize(name), content: schemaTab(name) };
+  });
 
   // Service: logging + git sync, grouped since both are infra-level, admin-only knobs.
   tabs.push({

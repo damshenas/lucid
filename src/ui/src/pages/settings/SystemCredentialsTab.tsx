@@ -13,7 +13,14 @@ interface Status {
  * write-only — the server never returns plaintext or ciphertext, only a
  * "configured" flag. Grouped by platform (Trading212, and whatever's added later) so
  * every platform lives in this one tab instead of getting its own. */
-export function SystemCredentialsTab() {
+interface Props {
+  /** Restrict to one platform (e.g. embedded inside Broker > Trading212). */
+  platform?: string;
+  /** Hide the descriptive intro paragraph when embedded elsewhere with its own context. */
+  compact?: boolean;
+}
+
+export function SystemCredentialsTab({ platform, compact = false }: Props = {}) {
   const [items, setItems] = useState<CredentialCatalogItem[]>([]);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [status, setStatus] = useState<Status | null>(null);
@@ -44,10 +51,12 @@ export function SystemCredentialsTab() {
 
   return (
     <div className="space-y-3">
-      <p className="text-sm text-white/50">
-        System-level defaults used when a trader has "use default credentials" enabled.
-        Values are write-only and never displayed once saved.
-      </p>
+      {!compact && (
+        <p className="text-sm text-white/50">
+          System-level defaults used when a trader has "use default credentials" enabled.
+          Values are write-only and never displayed once saved.
+        </p>
+      )}
       {status && (
         <p
           className={`rounded-xl border px-3 py-2 text-sm ${
@@ -65,6 +74,7 @@ export function SystemCredentialsTab() {
         savingKey={savingKey}
         onDraftChange={(key, value) => setDrafts((prev) => ({ ...prev, [key]: value }))}
         onSave={save}
+        platform={platform}
       />
     </div>
   );

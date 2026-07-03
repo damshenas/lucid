@@ -11,10 +11,9 @@ execution:
 strategy:
   active_buy_strategy: null
   active_sell_strategy: trailing_stop
-  trailing_stop:
-    enabled: true
-    atr_multiplier: 3.0
-    profit_take_levels: [20.0, 50.0]
+  # Per-strategy tunables (e.g. trailing_stop's atr_multiplier) live in each
+  # strategy file's own CONFIG_SCHEMA, not here — see src/conf/schema.py's
+  # StrategyConfig docstring.
 
 git_sync:
   enabled: false                # pulls strategies from a git repo into the algorithms

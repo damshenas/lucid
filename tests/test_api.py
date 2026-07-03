@@ -61,9 +61,12 @@ def test_settings_schema_and_strategies(client: TestClient) -> None:
         "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
     ).json()["access_token"]
 
-    schema = client.get("/api/v1/settings/schema", headers=_auth(token))
-    assert schema.status_code == 200
-    assert "execution" in schema.json()
+    schema = client.get("/api/v1/settings/schema", headers=_auth(token)).json()
+    assert "execution" in schema
+    # Every discovered strategy shows up (not only the active one) — active_buy_strategy
+    # is unset by default, but its config should still be browsable/activatable.
+    assert "strategy.trend_follow" in schema
+    assert "strategy.trailing_stop" in schema
 
     # built-in strategies were scanned at startup
     listing = client.get("/api/v1/strategies", headers=_auth(token)).json()

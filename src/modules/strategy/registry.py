@@ -79,5 +79,13 @@ class StrategyRegistryService:
         ]
         return build_extra_sections(active)
 
+    def all_extra_sections(self) -> dict[str, dict[str, dict[str, Any]]]:
+        """Config sections for every discovered strategy, active or not.
+
+        Used by the settings UI so admins/traders can browse and activate any
+        available strategy, not only whichever one already happens to be active.
+        """
+        return build_extra_sections(list(self._discover().values()))
+
 
 __all__ = ["StrategyRegistryService", "build_extra_sections"]

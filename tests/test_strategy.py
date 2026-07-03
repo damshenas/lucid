@@ -75,3 +75,20 @@ async def test_compile_schema_includes_active_strategy(session: AsyncSession) ->
     assert "rsi_max" in schema["strategy.trend_follow"]
     # default active_sell_strategy is trailing_stop
     assert "strategy.trailing_stop" in schema
+
+
+async def test_all_extra_sections_includes_every_strategy_regardless_of_active(
+    session: AsyncSession,
+) -> None:
+    """Settings must be able to show a tab per available strategy, not only whichever
+    one happens to be active (that used to hide trend_follow entirely when no buy
+    strategy was active yet)."""
+    registry = StrategyRegistryService(session, "strategies")
+    await registry.scan()
+
+    extra = registry.all_extra_sections()
+
+    assert "strategy.trend_follow" in extra
+    assert "rsi_max" in extra["strategy.trend_follow"]
+    assert "strategy.trailing_stop" in extra
+    assert "atr_multiplier" in extra["strategy.trailing_stop"]

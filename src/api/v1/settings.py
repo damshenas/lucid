@@ -31,8 +31,10 @@ async def get_schema(
 ) -> dict[str, Any]:
     ctx = get_context(request)
     config = ctx.config_service(session)
-    values = await config.compile_values(user_id=user.id, asset_class=asset_class)
-    extra = ctx.strategy_service(session).active_extra_sections(values)
+    # Every discovered strategy's config is exposed (not only the active one) so the
+    # UI can let a user browse and activate any of them, not just whatever already
+    # happens to be active.
+    extra = ctx.strategy_service(session).all_extra_sections()
     return await config.compile_schema(user_id=user.id, asset_class=asset_class, extra_sections=extra)
 
 

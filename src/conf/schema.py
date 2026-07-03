@@ -31,16 +31,13 @@ class ExecutionConfig(BaseModel):
     dedup_window_seconds: int = 300
 
 
-class TrailingStopConfig(BaseModel):
-    enabled: bool = True
-    atr_multiplier: float = 3.0
-    profit_take_levels: list[float] = Field(default_factory=lambda: [20.0, 50.0])
-
-
 class StrategyConfig(BaseModel):
     active_buy_strategy: str | None = None
     active_sell_strategy: str | None = "trailing_stop"
-    trailing_stop: TrailingStopConfig = Field(default_factory=TrailingStopConfig)
+    # Per-strategy tunables (e.g. trailing_stop's atr_multiplier) live entirely in
+    # each strategy file's own CONFIG_SCHEMA — see strategies/{buy,sell}/*.py and
+    # StrategyRegistryService.all_extra_sections — not here, to avoid two competing
+    # sources of truth for the same "strategy.<name>.<field>" config keys.
 
 
 class ScheduleConfig(BaseModel):
