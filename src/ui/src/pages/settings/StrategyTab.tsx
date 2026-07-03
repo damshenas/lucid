@@ -1,4 +1,5 @@
 import { Badge } from "../../components/ui/Badge";
+import { Button } from "../../components/ui/Button";
 import { Card } from "../../components/ui/Card";
 import { Tabs } from "../../components/ui/Tabs";
 import { Toggle } from "../../components/ui/Toggle";
@@ -9,6 +10,8 @@ import { emptyGroup, humanize, type GroupNode } from "./schemaTree";
 interface Props {
   strategyNode: GroupNode; // tree.strategy — direct fields (active_*_strategy) plus one nested group per discovered strategy
   strategies: Strategy[]; // every discovered strategy (both directions), from GET /api/v1/strategies
+  strategiesLoaded: boolean; // false until the first fetch settles — distinguishes "still loading" from "loaded but empty"
+  onRescan: () => void; // re-runs strategy discovery (POST /api/v1/strategies/scan) then refetches
   edited: Record<string, unknown>;
   onChange: (key: string, raw: string, type: string) => void;
   readOnly: boolean;
@@ -64,7 +67,15 @@ function SingleStrategyPanel({
  * a dropdown — activation happens per-strategy below instead), then one nested tab
  * per *available* strategy (active or not), each with its own activate toggle and
  * config fields. */
-export function StrategyTab({ strategyNode, strategies, edited, onChange, readOnly }: Props) {
+export function StrategyTab({
+  strategyNode,
+  strategies,
+  strategiesLoaded,
+  onRescan,
+  edited,
+  onChange,
+  readOnly,
+}: Props) {
   const activeBuy = activeName(strategyNode, edited, "buy");
   const activeSell = activeName(strategyNode, edited, "sell");
 
@@ -83,8 +94,21 @@ export function StrategyTab({ strategyNode, strategies, edited, onChange, readOn
         </div>
       </Card>
 
-      {strategies.length === 0 ? (
+      {!strategiesLoaded ? (
         <p className="py-6 text-center text-sm text-white/40">Loading…</p>
+      ) : strategies.length === 0 ? (
+        <Card>
+          <p className="mb-3 text-sm text-white/50">
+            No strategies were discovered on the server. If you just deployed or synced
+            an algorithm repo, try rescanning; otherwise check that
+            <code className="mx-1 rounded bg-white/10 px-1 py-0.5">STRATEGIES_ROOT</code>
+            actually has files under its <code className="mx-1 rounded bg-white/10 px-1 py-0.5">buy/</code>
+            and <code className="mx-1 rounded bg-white/10 px-1 py-0.5">sell/</code> folders.
+          </p>
+          <Button variant="secondary" onClick={onRescan}>
+            Rescan strategies
+          </Button>
+        </Card>
       ) : (
         <Tabs
           level="nested"

@@ -26,13 +26,6 @@ function canWriteSection(role: Role | null, name: string): boolean {
   return name === "strategy" && hasPermission(role, "edit_own_strategies");
 }
 
-// Renders a nested tab strip, but skips the tab chrome entirely when there's only one
-// tab to show (e.g. a viewer's Broker tab has no Credentials sub-tab to switch to).
-function NestedTabs({ tabs }: { tabs: TabDef[] }) {
-  if (tabs.length === 1) return <>{tabs[0].content}</>;
-  return <Tabs level="nested" tabs={tabs} />;
-}
-
 // Every schema section is fetched and shown to every authenticated user — the backend
 // GET /settings/schema endpoint itself has no permission gate, and hiding sections a
 // role merely can't edit is confusing ("where did my settings go?"). Sections the role
@@ -45,9 +38,18 @@ export function Settings() {
 
   const [schema, setSchema] = useState<SettingsSchema>({});
   const [strategies, setStrategies] = useState<Strategy[]>([]);
+  const [strategiesLoaded, setStrategiesLoaded] = useState(false);
   const [edited, setEdited] = useState<Record<string, unknown>>({});
   const [status, setStatus] = useState<Status | null>(null);
   const [saving, setSaving] = useState(false);
+
+  function refreshStrategies() {
+    return api
+      .strategies()
+      .then(setStrategies)
+      .catch((e) => setStatus({ text: (e as Error).message, tone: "error" }))
+      .finally(() => setStrategiesLoaded(true));
+  }
 
   useEffect(() => {
     api
@@ -56,10 +58,7 @@ export function Settings() {
       .catch((e) => setStatus({ text: (e as Error).message, tone: "error" }));
     // Every discovered strategy (active or not) — lets the Strategy tab show a
     // sub-tab per available strategy, not only whichever one is already active.
-    api
-      .strategies()
-      .then(setStrategies)
-      .catch(() => {});
+    refreshStrategies();
   }, []);
 
   useEffect(() => {
@@ -105,6 +104,16 @@ export function Settings() {
     );
   }
 
+  async function rescanStrategies() {
+    try {
+      await api.scanStrategies();
+    } catch (e) {
+      setStatus({ text: (e as Error).message, tone: "error" });
+      return;
+    }
+    await refreshStrategies();
+  }
+
   // Broker: one nested tab per platform, each showing whether it's active, paper
   // mode, and that platform's own credentials all together (not split across
   // separate "Settings"/"Credentials" sub-tabs).
@@ -131,7 +140,7 @@ export function Settings() {
   // so the tab bar never reshuffles or flickers while the schema loads.
   const tabs: TabDef[] = SETTINGS_SECTION_ORDER.map((name) => {
     if (name === "broker") {
-      return { id: "broker", label: "Broker", content: <NestedTabs tabs={brokerTabs} /> };
+      return { id: "broker", label: "Broker", content: <Tabs level="nested" tabs={brokerTabs} /> };
     }
     if (name === "strategy") {
       return {
@@ -141,6 +150,8 @@ export function Settings() {
           <StrategyTab
             strategyNode={tree.strategy ?? emptyGroup()}
             strategies={strategies}
+            strategiesLoaded={strategiesLoaded}
+            onRescan={rescanStrategies}
             edited={edited}
             onChange={onFieldChange}
             readOnly={!canWriteSection(role, "strategy")}
@@ -156,7 +167,8 @@ export function Settings() {
     id: "service",
     label: "Service",
     content: (
-      <NestedTabs
+      <Tabs
+        level="nested"
         tabs={[
           { id: "logging", label: "Logging", content: schemaTab("logger") },
           { id: "git-sync", label: "Git Sync", content: schemaTab("git_sync") },
