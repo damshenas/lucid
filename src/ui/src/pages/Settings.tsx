@@ -4,7 +4,7 @@ import { Button } from "../components/ui/Button";
 import { Tabs, type TabDef } from "../components/ui/Tabs";
 import { useAuth } from "../hooks/useAuth";
 import { hasPermission } from "../lib/permissions";
-import type { Permission } from "../lib/permissions";
+import type { Role } from "../lib/permissions";
 import type { SettingsSchema } from "../types";
 import { MyCredentialsTab } from "./settings/MyCredentialsTab";
 import { SchemaGroup, type StrategyOptions } from "./settings/SchemaGroup";
@@ -17,11 +17,13 @@ interface Status {
   tone: "success" | "error";
 }
 
-// Mirrors required_permission_for_key() in src/modules/configs/__init__.py: only the
-// "strategy" section is trader-editable, everything else is an admin-only "system
-// default". Used to disable (not hide) sections the current role can't write to.
-function sectionPermission(name: string): Permission {
-  return name === "strategy" ? "edit_own_strategies" : "edit_system_settings";
+// Mirrors can_write_key() in src/modules/configs/__init__.py: admin manages "system
+// defaults" for every section (written globally); a trader may *additionally*
+// override their own personal strategy.* choice. Used to disable (not hide) sections
+// the current role can't write to.
+function canWriteSection(role: Role | null, name: string): boolean {
+  if (hasPermission(role, "edit_system_settings")) return true;
+  return name === "strategy" && hasPermission(role, "edit_own_strategies");
 }
 
 // Renders a nested tab strip, but skips the tab chrome entirely when there's only one
@@ -99,7 +101,7 @@ export function Settings() {
         node={tree[name] ?? emptyGroup()}
         edited={edited}
         onChange={onFieldChange}
-        readOnly={!hasPermission(role, sectionPermission(name))}
+        readOnly={!canWriteSection(role, name)}
         strategyOptions={strategyOptions}
       />
     ) : (

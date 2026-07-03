@@ -33,10 +33,8 @@ export function Login({ initialized, onLogin, onSetup }: Props) {
     <div className="flex min-h-screen items-center justify-center px-4">
       <div className="glass w-full max-w-sm animate-fade-in-up rounded-3xl p-8">
         <div className="mb-1 flex items-center gap-2">
-          <span className="h-2.5 w-2.5 rounded-full bg-gradient-to-r from-violet to-cyan" />
-          <h1 className="bg-gradient-to-r from-violet via-white to-cyan bg-clip-text text-2xl font-bold text-transparent">
-            Lucid
-          </h1>
+          <span className="h-2.5 w-2.5 rounded-full bg-accent" />
+          <h1 className="text-2xl font-bold text-white">Lucid</h1>
         </div>
         <p className="mb-6 text-sm text-white/50">
           {isSetup ? "Create the first admin account" : "Sign in to continue"}

@@ -38,7 +38,7 @@ export function AppLayout({ role, onLogout }: Props) {
 
       <header className="glass sticky top-0 z-10 flex items-center justify-between px-4 py-3 sm:px-6 md:px-8">
         <div className="flex items-center gap-2">
-          <span className="h-2 w-2 rounded-full bg-gradient-to-r from-violet to-cyan md:hidden" />
+          <span className="h-2 w-2 rounded-full bg-accent md:hidden" />
           <span className="text-lg font-semibold tracking-tight">
             Lucid <span className="text-white/40 font-normal">/ {title}</span>
           </span>

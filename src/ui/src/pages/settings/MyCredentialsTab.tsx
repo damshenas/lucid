@@ -1,10 +1,9 @@
 import { useEffect, useState } from "react";
 import { api } from "../../api/client";
-import { Badge } from "../../components/ui/Badge";
-import { Button } from "../../components/ui/Button";
 import { Card } from "../../components/ui/Card";
 import { Toggle } from "../../components/ui/Toggle";
 import type { CredentialCatalogItem } from "../../types";
+import { CredentialFields } from "./CredentialFields";
 
 interface Status {
   text: string;
@@ -12,7 +11,9 @@ interface Status {
 }
 
 /** Trader-only: own broker credentials, with a fallback to the admin-configured
- * system defaults via "use default credentials" (see modules/encryption/credentials.py). */
+ * system defaults via "use default credentials" (see modules/encryption/credentials.py).
+ * Grouped by platform (Trading212, and whatever's added later) so every platform
+ * lives in this one tab instead of getting its own. */
 export function MyCredentialsTab() {
   const [useDefault, setUseDefault] = useState(false);
   const [items, setItems] = useState<CredentialCatalogItem[]>([]);
@@ -82,50 +83,26 @@ export function MyCredentialsTab() {
         </div>
       </Card>
 
-      <Card>
-        <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-white/40">
-          My credentials
-        </h3>
-        {status && (
-          <p
-            className={`mb-3 rounded-xl border px-3 py-2 text-sm ${
-              status.tone === "success"
-                ? "border-cyan/30 bg-cyan/10 text-cyan"
-                : "border-rose/30 bg-rose/10 text-rose"
-            }`}
-          >
-            {status.text}
-          </p>
-        )}
-        <div className="space-y-3">
-          {items.map((item) => (
-            <div key={item.key} className="flex flex-wrap items-end gap-3">
-              <label className="block flex-1 min-w-[14rem]">
-                <span className="mb-1 flex items-center gap-2 text-sm text-white/80">
-                  {item.label}
-                  <Badge tone={item.configured ? "cyan" : "neutral"}>
-                    {item.configured ? "configured" : "not set"}
-                  </Badge>
-                </span>
-                <input
-                  type={item.secret ? "password" : "text"}
-                  value={drafts[item.key] ?? ""}
-                  onChange={(e) => setDrafts((prev) => ({ ...prev, [item.key]: e.target.value }))}
-                  placeholder={item.configured ? "••••••••" : `Set ${item.label}`}
-                  className="w-full rounded-xl border border-white/10 bg-white/5 px-3.5 py-2 text-sm text-white outline-none transition-colors focus:border-violet/50 focus:glow-violet"
-                />
-              </label>
-              <Button
-                variant="secondary"
-                disabled={!drafts[item.key] || savingKey === item.key}
-                onClick={() => save(item.key)}
-              >
-                {savingKey === item.key ? "Saving…" : "Save"}
-              </Button>
-            </div>
-          ))}
-        </div>
-      </Card>
+      {status && (
+        <p
+          className={`rounded-xl border px-3 py-2 text-sm ${
+            status.tone === "success"
+              ? "border-cyan/30 bg-cyan/10 text-cyan"
+              : "border-rose/30 bg-rose/10 text-rose"
+          }`}
+        >
+          {status.text}
+        </p>
+      )}
+
+      <CredentialFields
+        items={items}
+        drafts={drafts}
+        savingKey={savingKey}
+        onDraftChange={(key, value) => setDrafts((prev) => ({ ...prev, [key]: value }))}
+        onSave={save}
+      />
     </div>
   );
 }
+

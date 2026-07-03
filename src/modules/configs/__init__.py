@@ -36,15 +36,6 @@ SECRET_WORDS = ("key", "token", "secret", "password")
 
 _MISSING = object()
 
-# Per-section permission required to write a config key, keyed by the section name
-# (the part of the dotted key before the first "."). Sections not listed here fall
-# back to _DEFAULT_SECTION_PERMISSION. Per plan.md's RBAC table, only "trader"s may
-# edit their own strategy config; everything else is an admin-only "system default".
-_SECTION_PERMISSIONS: dict[str, Permission] = {
-    "strategy": Permission.edit_own_strategies,
-}
-_DEFAULT_SECTION_PERMISSION = Permission.edit_system_settings
-
 
 class ConfigError(Exception):
     """Raised for invalid config operations (e.g. secrets in YAML)."""
@@ -54,9 +45,19 @@ class ConfigPermissionError(ConfigError):
     """Raised when a role lacks permission to write a given config key."""
 
 
-def required_permission_for_key(key: str) -> Permission:
+def can_write_key(role: str, key: str) -> bool:
+    """Whether ``role`` may write ``key`` at all.
+
+    Per plan.md's RBAC table, admin manages "system defaults" — every section,
+    written globally (``user_id=None``; see ``save_values`` in api/v1/settings.py) so
+    the change applies to everyone. A trader may *additionally* override their own
+    personal ``strategy.*`` choice (scoped to their own ``user_id``) without needing
+    ``edit_system_settings``. Viewers can write nothing.
+    """
+    if has_permission(role, Permission.edit_system_settings):
+        return True
     section = key.split(".", 1)[0]
-    return _SECTION_PERMISSIONS.get(section, _DEFAULT_SECTION_PERMISSION)
+    return section == "strategy" and has_permission(role, Permission.edit_own_strategies)
 
 
 def is_secret_key(key: str) -> bool:
@@ -232,8 +233,7 @@ class ConfigService:
     ) -> None:
         if is_secret_key(key):
             raise ConfigError(f"'{key}' is a secret; use the credential store, not config")
-        permission = required_permission_for_key(key)
-        if not has_permission(role, permission):
+        if not can_write_key(role, key):
             raise ConfigPermissionError(f"role '{role}' lacks permission to set '{key}'")
         await self._repo.upsert_scoped(key, value, user_id=user_id, asset_class=asset_class)
 
@@ -272,10 +272,10 @@ __all__ = [
     "ConfigPermissionError",
     "ConfigService",
     "SchemaSection",
+    "can_write_key",
     "flatten",
     "is_secret_key",
     "load_default_config",
     "module_sections",
-    "required_permission_for_key",
     "unflatten",
 ]

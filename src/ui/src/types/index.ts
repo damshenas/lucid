@@ -87,6 +87,7 @@ export interface Job {
 export interface CredentialCatalogItem {
   key: string;
   label: string;
+  platform: string;
   secret: boolean;
   configured: boolean;
 }

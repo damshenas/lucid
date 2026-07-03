@@ -116,6 +116,32 @@ def test_settings_write_requires_permission(client: TestClient) -> None:
     assert admin_resp.status_code == 200
 
 
+def test_admin_sets_global_default_strategy_visible_to_trader(client: TestClient) -> None:
+    """Regression: admin's writes must apply globally (not just to their own,
+    trading-disabled account), so a trader picks up the admin-chosen default."""
+    admin_token = client.post(
+        "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
+    ).json()["access_token"]
+    client.post(
+        "/api/v1/admin/users",
+        headers=_auth(admin_token),
+        json={"username": "trader3", "password": "traderpass", "role": "trader"},
+    )
+    trader_token = client.post(
+        "/api/v1/auth/login", json={"username": "trader3", "password": "traderpass"}
+    ).json()["access_token"]
+
+    resp = client.post(
+        "/api/v1/settings",
+        headers=_auth(admin_token),
+        json={"values": {"strategy.active_buy_strategy": "trend_follow"}},
+    )
+    assert resp.status_code == 200
+
+    values = client.get("/api/v1/settings", headers=_auth(trader_token)).json()
+    assert values["strategy"]["active_buy_strategy"] == "trend_follow"
+
+
 def test_create_user_invalid_role_rejected(client: TestClient) -> None:
     admin_token = client.post(
         "/api/v1/auth/setup", json={"username": "root", "password": "password123"}

@@ -26,10 +26,8 @@ export function Sidebar({ items }: Props) {
   return (
     <aside className="glass fixed inset-y-0 left-0 z-20 hidden w-60 flex-col overflow-y-auto border-r border-white/10 px-3 py-6 md:flex">
       <div className="mb-6 flex items-center gap-2 px-3">
-        <span className="h-2.5 w-2.5 rounded-full bg-gradient-to-r from-violet to-cyan" />
-        <span className="bg-gradient-to-r from-violet via-white to-cyan bg-clip-text text-lg font-bold text-transparent">
-          Lucid
-        </span>
+        <span className="h-2.5 w-2.5 rounded-full bg-accent" />
+        <span className="text-lg font-bold text-white">Lucid</span>
       </div>
       <nav className="flex flex-1 flex-col gap-5">
         {groups.map(([group, groupItems]) => (

@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.modules.authorization import Permission, has_permission
 from src.modules.configs import ConfigError, ConfigPermissionError
 from src.modules.db.models.user import User
 
@@ -54,10 +55,15 @@ async def save_values(
     user: User = Depends(get_current_user),
 ) -> dict[str, bool]:
     config = get_context(request).config_service(session)
+    # Admins manage "system defaults" (per plan.md's RBAC table) — their writes apply
+    # globally (user_id=None) so every trader/viewer picks them up, rather than only
+    # affecting the admin's own (trading-disabled) account. A trader's own
+    # strategy.* override still lands on their personal user_id.
+    target_user_id = None if has_permission(user.role, Permission.edit_system_settings) else user.id
     try:
         for key, value in body.values.items():
             await config.set_value(
-                key, value, role=user.role, user_id=user.id, asset_class=body.asset_class
+                key, value, role=user.role, user_id=target_user_id, asset_class=body.asset_class
             )
     except ConfigPermissionError as exc:
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc

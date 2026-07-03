@@ -22,11 +22,23 @@ from ..deps import get_context, get_session, require_permission
 
 router = APIRouter(prefix="/api/v1/credentials", tags=["credentials"])
 
-# Keys manageable through this API. Extend here when a new integration needs a
-# platform credential — the credential store itself accepts any string key.
+# Keys manageable through this API, grouped by platform so the UI can render one
+# section per platform inside a single Credentials tab. Extend here when a new
+# integration needs a platform credential — the credential store itself accepts any
+# string key. "platform" is a display grouping only, not used for authorization.
 CREDENTIAL_CATALOG: list[dict[str, Any]] = [
-    {"key": "trading212_api_key", "label": "Trading212 API Key", "secret": True},
-    {"key": "trading212_base_url", "label": "Trading212 Base URL", "secret": False},
+    {
+        "key": "trading212_api_key",
+        "label": "API Key",
+        "platform": "Trading212",
+        "secret": True,
+    },
+    {
+        "key": "trading212_base_url",
+        "label": "Base URL",
+        "platform": "Trading212",
+        "secret": False,
+    },
 ]
 _KNOWN_KEYS = {item["key"] for item in CREDENTIAL_CATALOG}
 
