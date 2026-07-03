@@ -38,8 +38,16 @@ class GitSync:
         return shutil.which("git") is not None
 
     async def _run(self, *args: str) -> str:
+        # EXT_STRATEGIES is a bind-mounted volume typically owned by a different
+        # uid/gid than the container's non-root runtime user (docker/Dockerfile), so
+        # git's ownership check (>= 2.35.2) refuses to operate on it as "dubious
+        # ownership" unless explicitly told it's safe. Passed per-invocation (not
+        # written to a global ~/.gitconfig) since the container filesystem is
+        # read-only (docker/compose.yml) besides the /data and /ext_strategies mounts.
         proc = await asyncio.create_subprocess_exec(
             "git",
+            "-c",
+            f"safe.directory={self._path}",
             *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
