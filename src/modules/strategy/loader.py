@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.util
 import shutil
+import sys
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,6 +51,13 @@ def load_strategy_file(path: Path, direction: str) -> LoadedStrategy:
     if spec is None or spec.loader is None:
         raise StrategyLoadError(f"cannot load {path}")
     module = importlib.util.module_from_spec(spec)
+    # Must be registered in sys.modules *before* exec_module: a strategy file using
+    # @dataclass (or anything relying on typing.get_type_hints/postponed annotation
+    # evaluation) has its field types resolved via
+    # sys.modules.get(cls.__module__).__dict__ during class creation — if the module
+    # isn't in sys.modules yet, that lookup returns None and raises
+    # "AttributeError: 'NoneType' object has no attribute '__dict__'".
+    sys.modules[module_name] = module
     spec.loader.exec_module(module)
 
     run = _require(module, "run", path)
