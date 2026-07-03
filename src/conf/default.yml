@@ -16,10 +16,9 @@ strategy:
   # StrategyConfig docstring.
 
 git_sync:
-  enabled: false                # pulls strategies from a git repo into the algorithms
-  repo_url: null                # staging dir, then deploys them into the strategies dir
-  branch: main
-  interval_minutes: 0           # 0 disables the scheduled sync (still runs at startup)
+  enabled: false                # pulls EXT_STRATEGIES (an already-cloned git checkout)
+                                 # and deploys its buy/sell files; on-demand only, via
+                                 # POST /api/v1/admin/git-sync (also runs once at startup)
 
 schedule:
   task_timeout_seconds: 300

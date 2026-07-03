@@ -7,6 +7,7 @@ import { hasPermission } from "../lib/permissions";
 import type { Role } from "../lib/permissions";
 import type { SettingsSchema, Strategy } from "../types";
 import { BrokerPlatformPanel } from "./settings/BrokerPlatformPanel";
+import { GitSyncTab } from "./settings/GitSyncTab";
 import { SchemaGroup } from "./settings/SchemaGroup";
 import { BROKER_PLATFORMS, SETTINGS_SECTION_ORDER, buildSchemaTree, emptyGroup, humanize } from "./settings/schemaTree";
 import { SecurityTab } from "./settings/SecurityTab";
@@ -171,7 +172,20 @@ export function Settings() {
         level="nested"
         tabs={[
           { id: "logging", label: "Logging", content: schemaTab("logger") },
-          { id: "git-sync", label: "Git Sync", content: schemaTab("git_sync") },
+          {
+            id: "git-sync",
+            label: "Git Sync",
+            content: schemaLoaded ? (
+              <GitSyncTab
+                gitSyncNode={tree.git_sync ?? emptyGroup()}
+                edited={edited}
+                onChange={onFieldChange}
+                readOnly={!canWriteSection(role, "git_sync")}
+              />
+            ) : (
+              <p className="py-6 text-center text-sm text-white/40">Loading…</p>
+            ),
+          },
         ]}
       />
     ),

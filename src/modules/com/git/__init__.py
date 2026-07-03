@@ -1,11 +1,13 @@
 """Git sync for strategy files.
 
-Pulls a strategy repository into a staging directory (``local_path`` — a mounted
-volume, e.g. ``EXT_STRATEGIES``) so new ``buy``/``sell`` files appear without manual
-upload. The app never runs code directly out of that staging mount: ``deploy_strategies``
-copies the discovered files into the real strategies directory (``STRATEGIES_ROOT``)
-afterwards. Uses the ``git`` CLI via asyncio subprocess (no extra dependency). The
-resulting commit hash is used as the strategy version.
+``local_path`` (``EXT_STRATEGIES``, a mounted volume) is expected to already be a git
+checkout — set up out-of-band on the host with the desired remote/branch — so all this
+does is run ``git pull`` in it on demand (triggered by an admin, not on a schedule) so
+new ``buy``/``sell`` files appear without manual upload. The app never runs code
+directly out of that staging mount: ``deploy_strategies`` copies the discovered files
+into the real strategies directory (``STRATEGIES_ROOT``) afterwards. Uses the ``git``
+CLI via asyncio subprocess (no extra dependency). The resulting commit hash is used as
+the strategy version.
 """
 
 from __future__ import annotations
@@ -16,8 +18,7 @@ from pathlib import Path
 
 from src.modules.logger import get_logger
 
-REQUIRED_CONFIG = ["repo_url", "local_path"]
-OPTIONAL_CONFIG = {"branch": "main"}
+REQUIRED_CONFIG = ["local_path"]
 
 _DIRECTIONS = ("buy", "sell")
 
@@ -29,10 +30,8 @@ class GitError(Exception):
 
 
 class GitSync:
-    def __init__(self, repo_url: str, local_path: str, *, branch: str = "main") -> None:
-        self._repo_url = repo_url
+    def __init__(self, local_path: str) -> None:
         self._path = Path(local_path)
-        self._branch = branch
 
     @staticmethod
     def available() -> bool:
@@ -51,14 +50,18 @@ class GitSync:
         return stdout.decode().strip()
 
     async def sync(self) -> str:
-        """Clone or update the repo, then return the HEAD commit hash."""
+        """Pull the already-cloned repo, then return the HEAD commit hash.
+
+        Does not clone: ``local_path`` must already be a git checkout with its
+        remote/branch configured (set up manually on the host), matching how
+        ``EXT_STRATEGIES`` is provisioned.
+        """
         if not (self._path / ".git").is_dir():
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            await self._run("clone", "--branch", self._branch, self._repo_url, str(self._path))
-        else:
-            await self._run("-C", str(self._path), "fetch", "--all", "--prune")
-            await self._run("-C", str(self._path), "checkout", self._branch)
-            await self._run("-C", str(self._path), "reset", "--hard", f"origin/{self._branch}")
+            raise GitError(
+                f"{self._path} is not a git checkout (no .git directory) — clone it "
+                "on the host with the desired remote/branch first"
+            )
+        await self._run("-C", str(self._path), "pull")
         commit = await self.head_commit()
         _logger.info("strategy repo synced to %s", commit[:8])
         return commit
@@ -94,13 +97,13 @@ def deploy_strategies(staging_root: str | Path, target_root: str | Path) -> list
 
 
 async def sync_and_deploy(
-    *, repo_url: str, branch: str, staging_root: str | Path, target_root: str | Path
+    *, staging_root: str | Path, target_root: str | Path
 ) -> tuple[str, list[str]]:
-    """Sync the repo into the staging mount, then deploy files into the target dir.
+    """Pull the already-cloned staging repo, then deploy files into the target dir.
 
     Returns ``(head_commit, copied_file_paths)``.
     """
-    sync = GitSync(repo_url, str(staging_root), branch=branch)
+    sync = GitSync(str(staging_root))
     commit = await sync.sync()
     copied = deploy_strategies(staging_root, target_root)
     return commit, copied
@@ -109,7 +112,6 @@ async def sync_and_deploy(
 __all__ = [
     "GitError",
     "GitSync",
-    "OPTIONAL_CONFIG",
     "REQUIRED_CONFIG",
     "deploy_strategies",
     "sync_and_deploy",

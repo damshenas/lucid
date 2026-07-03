@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.modules.authentication import AuthError, AuthService
 from src.modules.authorization import Permission
+from src.modules.com.git import GitError
 from src.modules.db.models.base import Role
 from src.modules.db.models.user import User
 from src.modules.db.repositories.user import UserRepository
@@ -71,3 +72,21 @@ async def list_jobs(
         }
         for job in runtime.scheduler.job_list()
     ]
+
+
+@router.post("/git-sync")
+async def git_sync(
+    request: Request,
+    _: User = Depends(require_permission(Permission.edit_system_settings)),
+) -> dict[str, Any]:
+    """On-demand: pull the already-cloned ``EXT_STRATEGIES`` checkout and deploy its
+    ``buy``/``sell`` files into the strategies directory. No schedule — admin-triggered
+    only, via this endpoint (the "Sync now" button in Settings > Service > Git Sync)."""
+    runtime = getattr(request.app.state, "runtime", None)
+    if runtime is None:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "runtime not available")
+    try:
+        commit, copied = await runtime.git_sync()
+    except GitError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    return {"commit": commit, "deployed": copied}

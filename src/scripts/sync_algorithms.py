@@ -6,13 +6,15 @@ Run by ``docker/entrypoint.sh`` after migrations but before the app starts.
 production, see docker/compose.yml) that starts empty on every container start, so
 this always: (1) seeds it from the image's baked-in ``BUILTIN_STRATEGIES_ROOT``
 (``/app/strategies`` — never mounted over, always available), then (2) if git sync is
-configured, pulls the repo into the ``EXT_STRATEGIES`` staging mount and copies its
-``buy``/``sell`` files on top. The app only ever scans ``STRATEGIES_ROOT`` — it never
-runs code directly out of ``EXT_STRATEGIES`` — see ``src.modules.com.git.deploy_strategies``.
+enabled, pulls the already-cloned ``EXT_STRATEGIES`` checkout (remote/branch configured
+out-of-band on the host) and copies its ``buy``/``sell`` files on top. The app only
+ever scans ``STRATEGIES_ROOT`` — it never runs code directly out of ``EXT_STRATEGIES``
+— see ``src.modules.com.git.deploy_strategies``. Beyond this startup run, syncing is
+on-demand only, triggered by an admin via ``POST /api/v1/admin/git-sync`` — there is no
+recurring schedule.
 
-The git-sync portion is a no-op (with a log line) when ``git_sync.enabled`` is false
-or no ``repo_url`` is configured. Safe to run without a reachable database (falls
-back to ``default.yml``).
+The git-sync portion is a no-op (with a log line) when ``git_sync.enabled`` is false.
+Safe to run without a reachable database (falls back to ``default.yml``).
 """
 
 from __future__ import annotations
@@ -81,14 +83,12 @@ async def main() -> None:
             exc,
         )
 
-    if not git_cfg.get("enabled") or not git_cfg.get("repo_url"):
-        _logger.info("git sync disabled or repo_url not set; skipping")
+    if not git_cfg.get("enabled"):
+        _logger.info("git sync disabled; skipping")
         return
 
     try:
         commit, copied = await sync_and_deploy(
-            repo_url=git_cfg["repo_url"],
-            branch=git_cfg.get("branch", "main"),
             staging_root=ext_strategies_root,
             target_root=strategies_root,
         )

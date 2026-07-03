@@ -84,6 +84,11 @@ export interface Job {
   last_error: string | null;
 }
 
+export interface GitSyncResult {
+  commit: string;
+  deployed: string[];
+}
+
 export interface CredentialCatalogItem {
   key: string;
   label: string;

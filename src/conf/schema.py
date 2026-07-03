@@ -51,15 +51,14 @@ class ScheduleConfig(BaseModel):
 class GitSyncConfig(BaseModel):
     """System-level (admin-only) config for syncing algorithm files from a git repo.
 
-    ``repo_url`` is cloned/pulled into the ``EXT_STRATEGIES`` staging directory (a
-    mounted volume), then discovered ``buy``/``sell`` strategy files are copied into
-    ``STRATEGIES_ROOT`` — the app never runs code directly out of the staging mount.
+    ``EXT_STRATEGIES`` is expected to already be a git checkout with its remote/branch
+    configured out-of-band on the host — this only ever runs ``git pull`` in it
+    on-demand (triggered by an admin, see ``POST /api/v1/admin/git-sync``), then copies
+    discovered ``buy``/``sell`` strategy files into ``STRATEGIES_ROOT``. The app never
+    runs code directly out of the staging mount.
     """
 
-    enabled: bool = False
-    repo_url: str | None = None
-    branch: str = "main"
-    interval_minutes: int = 0  # 0 disables the scheduled sync (startup sync still runs)
+    enabled: bool = False  # gates the startup sync and the on-demand sync button
 
 
 class PriceConfig(BaseModel):

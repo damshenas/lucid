@@ -55,7 +55,15 @@ async def test_disabled_placeholders() -> None:
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not available")
-async def test_git_sync(tmp_path: Path) -> None:
+async def test_git_sync_requires_existing_checkout(tmp_path: Path) -> None:
+    """``GitSync`` never clones — ``local_path`` must already be a git checkout (set up
+    out-of-band on the host), matching how ``EXT_STRATEGIES`` is provisioned."""
+    with pytest.raises(GitError):
+        await GitSync(str(tmp_path / "not-a-repo")).sync()
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not available")
+async def test_git_sync_pulls_existing_checkout(tmp_path: Path) -> None:
     origin = tmp_path / "origin"
     origin.mkdir()
     subprocess.run(["git", "init", "-q", "-b", "main"], cwd=origin, check=True)
@@ -66,11 +74,17 @@ async def test_git_sync(tmp_path: Path) -> None:
     subprocess.run(["git", "add", "."], cwd=origin, check=True)
     subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=origin, check=True)
 
+    # Pre-clone, exactly as EXT_STRATEGIES is provisioned out-of-band on the host.
     dest = tmp_path / "dest"
-    sync = GitSync(str(origin), str(dest), branch="main")
-    commit = await sync.sync()
+    subprocess.run(["git", "clone", "-q", str(origin), str(dest)], check=True)
+
+    (origin / "buy" / "y.py").write_text("STRATEGY_NAME='y'\n")
+    subprocess.run(["git", "add", "."], cwd=origin, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "second"], cwd=origin, check=True)
+
+    commit = await GitSync(str(dest)).sync()
     assert len(commit) == 40
-    assert (dest / "buy" / "x.py").exists()
+    assert (dest / "buy" / "y.py").exists()
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git not available")
@@ -88,11 +102,10 @@ async def test_git_sync_and_deploy_never_runs_from_staging(tmp_path: Path) -> No
     subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=origin, check=True)
 
     staging = tmp_path / "algorithms"
+    subprocess.run(["git", "clone", "-q", str(origin), str(staging)], check=True)
     target = tmp_path / "strategies"
 
-    commit, copied = await sync_and_deploy(
-        repo_url=str(origin), branch="main", staging_root=staging, target_root=target
-    )
+    commit, copied = await sync_and_deploy(staging_root=staging, target_root=target)
     assert len(commit) == 40
     assert copied == ["sell/y.py"]
     assert (target / "sell" / "y.py").exists()

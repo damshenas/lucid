@@ -2,6 +2,7 @@ import type {
   AdminUser,
   BacktestResult,
   CredentialCatalogItem,
+  GitSyncResult,
   Job,
   MyCredentials,
   Order,
@@ -112,6 +113,7 @@ export const api = {
       body: JSON.stringify({ username, password, role }),
     }),
   adminJobs: () => request<Job[]>("/api/v1/admin/jobs"),
+  gitSync: () => request<GitSyncResult>("/api/v1/admin/git-sync", { method: "POST" }),
   changePassword: (newPassword: string) =>
     request<{ ok: boolean }>("/api/v1/auth/change-password", {
       method: "POST",
