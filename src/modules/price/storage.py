@@ -36,3 +36,12 @@ def append_bars(storage_path: str | Path, ticker: str, interval: str, df: pd.Dat
     else:
         combined = df.sort_index()
     return write_bars(storage_path, ticker, interval, combined)
+
+
+def list_tickers(storage_path: str | Path, interval: str = "1d") -> list[str]:
+    """Tickers that already have stored bars for ``interval`` — used to power the
+    Prices page's ticker autocomplete (see GET /api/v1/prices in api/v1/prices.py)."""
+    directory = Path(storage_path) / interval
+    if not directory.is_dir():
+        return []
+    return sorted(p.stem for p in directory.glob("*.parquet"))

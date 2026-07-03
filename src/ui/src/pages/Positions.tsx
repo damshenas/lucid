@@ -5,12 +5,8 @@ import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 import { Select } from "../components/ui/Select";
+import { ASSET_CLASSES } from "../lib/assetClasses";
 import type { Position } from "../types";
-
-// Mirrors AssetClass in src/conf/schema.py — kept as a fixed list (like
-// pages/Backtesting.tsx's INTERVALS) so the sync target is always one of the
-// backend's known values rather than free text.
-const ASSET_CLASSES = ["equity", "commodity", "crypto", "fx"];
 
 export function Positions() {
   const [positions, setPositions] = useState<Position[]>([]);

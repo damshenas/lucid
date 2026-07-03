@@ -53,7 +53,8 @@ class ScheduleConfig(BaseModel):
     poll_positions_seconds: int = 300
     daily_price_hour: int = 22
     intraday_price_minutes: int = 15
-    strategy_scan_hour: int = 3
+    # Strategy files are (re)scanned at startup and via the manual "Rescan" button
+    # (POST /api/v1/strategies/scan) only — no periodic auto-scan.
 
 
 class PriceConfig(BaseModel):

@@ -68,6 +68,13 @@ export interface PriceBars {
   bars: PriceBar[];
 }
 
+export interface WatchlistItem {
+  ticker: string;
+  asset_class: string;
+  enabled: boolean;
+  has_bars: boolean;
+}
+
 export interface BacktestResult {
   ticker: string;
   strategy: string | null;

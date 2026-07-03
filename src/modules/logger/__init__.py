@@ -52,6 +52,18 @@ def configure_logging(level: str = "INFO", file_path: str | None = None) -> None
     _configured = True
 
 
+def set_level(level: str) -> None:
+    """Change the root logger's threshold live, without touching handlers.
+
+    Unlike ``configure_logging`` (handlers/formatter set up once, at process start),
+    this is safe to call any number of times — used so a ``logger.level`` change
+    made via Settings takes effect immediately instead of requiring a restart (see
+    ``save_values`` in src/api/v1/settings.py). Still subject to the same ``LOG_LEVEL``
+    env var override precedence applied at startup (see src/api/main.py).
+    """
+    logging.getLogger().setLevel(getattr(logging, level.upper(), logging.INFO))
+
+
 def get_logger(name: str) -> logging.Logger:
     """Return a named logger. Configures logging with defaults if not already done."""
     if not _configured:

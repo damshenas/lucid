@@ -247,3 +247,100 @@ def test_own_credentials_trader_only(client: TestClient) -> None:
 
     # admin (no edit_own_credentials permission) cannot use the "mine" routes
     assert client.get("/api/v1/credentials/mine", headers=_auth(admin_token)).status_code == 403
+
+
+def test_price_watchlist_crud(client: TestClient) -> None:
+    admin_token = client.post(
+        "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
+    ).json()["access_token"]
+    client.post(
+        "/api/v1/admin/users",
+        headers=_auth(admin_token),
+        json={"username": "trader4", "password": "traderpass", "role": "trader"},
+    )
+    trader_token = client.post(
+        "/api/v1/auth/login", json={"username": "trader4", "password": "traderpass"}
+    ).json()["access_token"]
+
+    assert client.get("/api/v1/prices/watchlist", headers=_auth(trader_token)).json() == []
+
+    # viewers/admins (no edit_own_strategies) cannot mutate the watchlist
+    assert (
+        client.post(
+            "/api/v1/prices/watchlist",
+            headers=_auth(admin_token),
+            json={"ticker": "amzn", "asset_class": "equity"},
+        ).status_code
+        == 403
+    )
+
+    add = client.post(
+        "/api/v1/prices/watchlist",
+        headers=_auth(trader_token),
+        json={"ticker": "amzn", "asset_class": "equity"},
+    )
+    assert add.status_code == 201
+    assert add.json() == {"ticker": "AMZN", "asset_class": "equity", "enabled": True}
+
+    listing = client.get("/api/v1/prices/watchlist", headers=_auth(trader_token)).json()
+    assert listing == [{"ticker": "AMZN", "asset_class": "equity", "enabled": True, "has_bars": False}]
+
+    disable = client.patch(
+        "/api/v1/prices/watchlist/AMZN", headers=_auth(trader_token), json={"enabled": False}
+    )
+    assert disable.status_code == 200
+    assert disable.json()["enabled"] is False
+
+    missing = client.patch(
+        "/api/v1/prices/watchlist/NOPE", headers=_auth(trader_token), json={"enabled": True}
+    )
+    assert missing.status_code == 404
+
+    remove = client.delete("/api/v1/prices/watchlist/AMZN", headers=_auth(trader_token))
+    assert remove.status_code == 204
+    assert client.get("/api/v1/prices/watchlist", headers=_auth(trader_token)).json() == []
+    assert client.delete("/api/v1/prices/watchlist/AMZN", headers=_auth(trader_token)).status_code == 404
+
+
+def test_log_level_applied_live_unless_env_override(monkeypatch) -> None:
+    import logging
+
+    from src.modules.logger import set_level
+
+    monkeypatch.delenv("LOG_LEVEL", raising=False)
+    set_level("DEBUG")
+    assert logging.getLogger().getEffectiveLevel() == logging.DEBUG
+    set_level("WARNING")
+    assert logging.getLogger().getEffectiveLevel() == logging.WARNING
+
+
+def test_settings_save_applies_log_level_live_unless_env_override(
+    client: TestClient, monkeypatch
+) -> None:
+    import src.api.v1.settings as settings_module
+
+    calls: list[str] = []
+    monkeypatch.setattr(settings_module, "set_level", calls.append)
+
+    admin_token = client.post(
+        "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
+    ).json()["access_token"]
+
+    monkeypatch.delenv("LOG_LEVEL", raising=False)
+    resp = client.post(
+        "/api/v1/settings",
+        headers=_auth(admin_token),
+        json={"values": {"logger.level": "DEBUG"}},
+    )
+    assert resp.status_code == 200
+    assert calls == ["DEBUG"]
+
+    # An ops-level LOG_LEVEL env var always wins — a Settings change has no live
+    # effect (and never will, until the env var is unset) while it's present.
+    monkeypatch.setenv("LOG_LEVEL", "info")
+    client.post(
+        "/api/v1/settings",
+        headers=_auth(admin_token),
+        json={"values": {"logger.level": "CRITICAL"}},
+    )
+    assert calls == ["DEBUG"]  # unchanged — second call was skipped

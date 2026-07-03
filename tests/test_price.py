@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.modules.db.repositories.price import PriceWatchlistRepository
 from src.modules.price import indicators, regime, storage
 from src.modules.price.pipeline import PricePipeline
 
@@ -58,6 +60,40 @@ def test_storage_append_dedup(tmp_path) -> None:
     storage.append_bars(tmp_path, "AAPL", "1d", df.iloc[-3:])  # overlapping
     loaded = storage.read_bars(tmp_path, "AAPL", "1d")
     assert len(loaded) == 10  # no duplicates
+
+
+def test_storage_list_tickers(tmp_path) -> None:
+    assert storage.list_tickers(tmp_path) == []
+    storage.write_bars(tmp_path, "AAPL", "1d", _uptrend_df(5))
+    storage.write_bars(tmp_path, "MSFT", "1d", _uptrend_df(5))
+    assert storage.list_tickers(tmp_path) == ["AAPL", "MSFT"]
+    assert storage.list_tickers(tmp_path, "15m") == []  # different interval, no files
+
+
+async def test_price_watchlist_repository_crud(session: AsyncSession) -> None:
+    repo = PriceWatchlistRepository(session)
+
+    assert await repo.list_all() == []
+
+    row = await repo.upsert("amzn", asset_class="equity")
+    assert row.ticker == "AMZN"  # normalized to upper case
+    assert row.enabled is True
+    assert [r.ticker for r in await repo.list_enabled()] == ["AMZN"]
+
+    # upsert again updates the existing row rather than creating a duplicate
+    updated = await repo.upsert("amzn", asset_class="crypto", enabled=False)
+    assert updated.id == row.id
+    assert updated.asset_class == "crypto"
+    assert await repo.list_enabled() == []
+
+    toggled = await repo.set_enabled("AMZN", True)
+    assert toggled is not None
+    assert toggled.enabled is True
+    assert await repo.set_enabled("NOPE", True) is None
+
+    assert await repo.delete_by_ticker("AMZN") is True
+    assert await repo.delete_by_ticker("AMZN") is False
+    assert await repo.list_all() == []
 
 
 async def test_pipeline_run_daily(tmp_path) -> None:

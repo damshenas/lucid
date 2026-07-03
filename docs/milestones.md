@@ -359,7 +359,8 @@ Scope:
 - `src/modules/schedules/` — thin APScheduler layer: register named jobs,
   hard timeout per task (default 5 min via `asyncio.wait_for`), `max_instances=1`,
   `coalesce=True`; expose job list + last-run status for the admin UI.
-- Register jobs: poll positions, `price.run_daily`/`run_intraday`, strategy scan, git sync.
+- Register jobs: poll positions, `price.run_daily`/`run_intraday`, git sync. Strategy
+  scanning is startup + manual-only (`POST /api/v1/strategies/scan`), not a recurring job.
 
 **DoD:**
 - A job exceeding its timeout is cancelled and logged (test).
@@ -383,8 +384,8 @@ Scope:
     / `-> SellSignalEvent | None` (sell)
 - `StrategyContext` provides `ticker`, `position`, `price_data`, `config`, `asset_class`,
   `user_id`, and access to `price.indicators` / `price.regime`.
-- **Scanner** upserts each discovered file into `strategy_registry`; runs at startup,
-  on a daily job, and via `POST /api/v1/strategies/scan`.
+- **Scanner** upserts each discovered file into `strategy_registry`; runs at startup
+  and via `POST /api/v1/strategies/scan` (manual rescan) — no recurring auto-scan job.
 - Per-user `active_buy_strategy` / `active_sell_strategy`; `decisions` loads the active
   strategy for the requesting user at runtime; switching it changes the compiled config view.
 - Built-ins: `strategies/buy/trend_follow.py`, `strategies/sell/trailing_stop.py`

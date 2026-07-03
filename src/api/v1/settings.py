@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -11,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.modules.authorization import Permission, has_permission
 from src.modules.configs import ConfigError, ConfigPermissionError
 from src.modules.db.models.user import User
+from src.modules.logger import set_level
 
 from ..deps import get_context, get_current_user, get_session
 
@@ -72,4 +74,9 @@ async def save_values(
     except ConfigError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     await session.commit()
+    # Apply a changed log level immediately rather than requiring a restart — same
+    # LOG_LEVEL-env-wins precedence as startup (src/api/main.py); a value someone
+    # set here has no effect if the ops-level env var override is present.
+    if "logger.level" in body.values and "LOG_LEVEL" not in os.environ:
+        set_level(str(body.values["logger.level"]))
     return {"ok": True}

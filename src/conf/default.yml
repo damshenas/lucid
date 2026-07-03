@@ -20,7 +20,8 @@ schedule:
   poll_positions_seconds: 300
   daily_price_hour: 22
   intraday_price_minutes: 15
-  strategy_scan_hour: 3
+  # Strategy files are (re)scanned at startup and via the manual "Rescan" button
+  # only — no periodic auto-scan (see src/conf/schema.py's ScheduleConfig).
 
 price:
   storage_path: /data/prices

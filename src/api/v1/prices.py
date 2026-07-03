@@ -1,4 +1,4 @@
-"""Price routes: read stored bars and trigger a backfill."""
+"""Price routes: read stored bars, trigger a backfill, and manage the watchlist."""
 
 from __future__ import annotations
 
@@ -8,12 +8,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.modules.authorization import Permission
 from src.modules.com import yahoofinance
 from src.modules.db.models.user import User
+from src.modules.db.repositories.price import PriceWatchlistRepository
 from src.modules.price import storage
 from src.modules.price.pipeline import PricePipeline
 
-from ..deps import get_context, get_current_user, get_session
+from ..deps import get_context, get_current_user, get_session, require_permission
 
 router = APIRouter(prefix="/api/v1/prices", tags=["prices"])
 
@@ -21,6 +23,82 @@ router = APIRouter(prefix="/api/v1/prices", tags=["prices"])
 class BackfillIn(BaseModel):
     ticker: str
     days: int = 365
+
+
+class WatchlistIn(BaseModel):
+    ticker: str
+    asset_class: str = "equity"
+
+
+class WatchlistPatch(BaseModel):
+    enabled: bool
+
+
+# Registered before the "/{ticker}" catch-all below so "/watchlist" doesn't get
+# swallowed by it (FastAPI/Starlette matches routes in registration order).
+@router.get("/watchlist")
+async def list_watchlist(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+) -> list[dict[str, Any]]:
+    storage_path = get_context(request).settings.price.storage_path
+    rows = await PriceWatchlistRepository(session).list_all()
+    result = [
+        {
+            "ticker": row.ticker,
+            "asset_class": row.asset_class,
+            "enabled": row.enabled,
+            "has_bars": storage.read_bars(storage_path, row.ticker, "1d") is not None,
+        }
+        for row in rows
+    ]
+    # Also surface any ticker with stored bars from before it was (or without ever
+    # being) added to the watchlist — e.g. an ad-hoc backfill from the Prices page —
+    # so the ticker autocomplete (see pages/Prices.tsx) covers every known ticker,
+    # not only ones already on the watchlist.
+    known = {r["ticker"] for r in result}
+    for ticker in storage.list_tickers(storage_path, "1d"):
+        if ticker not in known:
+            result.append({"ticker": ticker, "asset_class": "equity", "enabled": False, "has_bars": True})
+    return sorted(result, key=lambda r: r["ticker"])
+
+
+@router.post("/watchlist", status_code=status.HTTP_201_CREATED)
+async def add_to_watchlist(
+    body: WatchlistIn,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_permission(Permission.edit_own_strategies)),
+) -> dict[str, Any]:
+    row = await PriceWatchlistRepository(session).upsert(body.ticker, asset_class=body.asset_class)
+    await session.commit()
+    return {"ticker": row.ticker, "asset_class": row.asset_class, "enabled": row.enabled}
+
+
+@router.patch("/watchlist/{ticker}")
+async def set_watchlist_enabled(
+    ticker: str,
+    body: WatchlistPatch,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_permission(Permission.edit_own_strategies)),
+) -> dict[str, Any]:
+    row = await PriceWatchlistRepository(session).set_enabled(ticker, body.enabled)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"'{ticker}' is not on the watchlist")
+    await session.commit()
+    return {"ticker": row.ticker, "asset_class": row.asset_class, "enabled": row.enabled}
+
+
+@router.delete("/watchlist/{ticker}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_from_watchlist(
+    ticker: str,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(require_permission(Permission.edit_own_strategies)),
+) -> None:
+    removed = await PriceWatchlistRepository(session).delete_by_ticker(ticker)
+    if not removed:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"'{ticker}' is not on the watchlist")
+    await session.commit()
 
 
 @router.get("/{ticker}")

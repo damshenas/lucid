@@ -12,6 +12,7 @@ import type {
   Signal,
   Strategy,
   Tokens,
+  WatchlistItem,
 } from "../types";
 import { setServerOnline } from "../lib/serverStatus";
 
@@ -103,6 +104,21 @@ export const api = {
     request<{ rows: number }>("/api/v1/prices/backfill", {
       method: "POST",
       body: JSON.stringify({ ticker, days }),
+    }),
+  watchlist: () => request<WatchlistItem[]>("/api/v1/prices/watchlist"),
+  addToWatchlist: (ticker: string, assetClass: string) =>
+    request<WatchlistItem>("/api/v1/prices/watchlist", {
+      method: "POST",
+      body: JSON.stringify({ ticker, asset_class: assetClass }),
+    }),
+  setWatchlistEnabled: (ticker: string, enabled: boolean) =>
+    request<WatchlistItem>(`/api/v1/prices/watchlist/${encodeURIComponent(ticker)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ enabled }),
+    }),
+  removeFromWatchlist: (ticker: string) =>
+    request<void>(`/api/v1/prices/watchlist/${encodeURIComponent(ticker)}`, {
+      method: "DELETE",
     }),
   runBacktest: (ticker: string, interval = "1d", strategy?: string) =>
     request<BacktestResult>("/api/v1/backtesting/run", {

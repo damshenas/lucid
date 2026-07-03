@@ -88,6 +88,18 @@ class TradingRuntime:
             watchlist = await PriceWatchlistRepository(session).list_enabled()
             strat_service = self.ctx.strategy_service(session)
 
+        _logger.debug(
+            "run_strategies: %d trader(s), %d enabled watchlist ticker(s): %s",
+            len(users),
+            len(watchlist),
+            [w.ticker for w in watchlist],
+        )
+        if not watchlist:
+            _logger.debug(
+                "run_strategies: watchlist is empty — no ticker will ever produce a "
+                "signal until one is added (Prices page > Watchlist)"
+            )
+
         storage_path = self.ctx.settings.price.storage_path
         for user in users:
             try:
@@ -97,10 +109,22 @@ class TradingRuntime:
                 continue
             buy = strat_service.get_active(values, "buy")
             sell = strat_service.get_active(values, "sell")
+            _logger.debug(
+                "run_strategies: user=%s active_buy=%s active_sell=%s",
+                user.id,
+                buy.name if buy else None,
+                sell.name if sell else None,
+            )
+            if buy is None and sell is None:
+                continue
 
             for item in watchlist:
                 df = storage.read_bars(storage_path, item.ticker, "1d")
                 if df is None or df.empty:
+                    _logger.debug(
+                        "run_strategies: no stored bars for %s — skipping (backfill it first)",
+                        item.ticker,
+                    )
                     continue
                 try:
                     await self._evaluate_ticker(user.id, item, df, values, buy, sell)
@@ -123,6 +147,7 @@ class TradingRuntime:
                     )
                 )
                 if sell_signal is not None:
+                    _logger.debug("run_strategies: %s sell signal for %s", sell.name, item.ticker)
                     await self.ctx.bus.publish(sell_signal)
 
         if buy is not None:
@@ -136,6 +161,7 @@ class TradingRuntime:
                 )
             )
             if buy_signal is not None:
+                _logger.debug("run_strategies: %s buy signal for %s", buy.name, item.ticker)
                 await self.ctx.bus.publish(buy_signal)
 
     async def _scan_strategies(self) -> None:
@@ -170,9 +196,6 @@ class TradingRuntime:
             lambda: pipeline.run_intraday(interval=interval),
             id="price_intraday",
             minutes=max(1, schedule.intraday_price_minutes),
-        )
-        self.scheduler.add_cron_job(
-            self._scan_strategies, id="strategy_scan", hour=schedule.strategy_scan_hour
         )
         self.scheduler.add_interval_job(
             self.run_strategies,
