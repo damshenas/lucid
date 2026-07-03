@@ -8,7 +8,7 @@ interface Status {
   tone: "success" | "error";
 }
 
-export function AccountTab() {
+export function SecurityTab() {
   const [newPassword, setNewPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [saving, setSaving] = useState(false);

@@ -13,7 +13,7 @@ export function Select({ className = "", children, ...rest }: Props) {
     <div className="relative">
       <select
         {...rest}
-        className={`w-full appearance-none rounded-xl border border-white/10 bg-elevated px-3.5 py-2 pr-9 text-sm text-white outline-none transition-colors focus:border-violet/50 focus:glow-violet ${className}`}
+        className={`w-full appearance-none rounded-xl border border-white/10 bg-elevated px-3.5 py-2 pr-9 text-sm text-white outline-none transition-colors focus:border-violet/50 focus:glow-violet disabled:cursor-not-allowed disabled:opacity-50 ${className}`}
       >
         {children}
       </select>

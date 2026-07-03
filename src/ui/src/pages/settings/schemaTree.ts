@@ -53,16 +53,11 @@ export function buildSchemaTree(schema: SettingsSchema): Record<string, GroupNod
  * Canonical top-level section order (mirrors LucidConfig in src/conf/schema.py).
  * Fixed so the tab bar doesn't reshuffle/flicker while the schema is still loading —
  * each tab just shows a loading placeholder until its section arrives.
+ *
+ * "logger" and "git_sync" are deliberately excluded here — they're rendered as nested
+ * tabs under the composite "Service" tab instead (see pages/Settings.tsx).
  */
-export const SETTINGS_SECTION_ORDER = [
-  "execution",
-  "strategy",
-  "schedule",
-  "git_sync",
-  "price",
-  "broker",
-  "logger",
-];
+export const SETTINGS_SECTION_ORDER = ["execution", "strategy", "schedule", "price", "broker"];
 
 export function humanize(name: string): string {
   return name

@@ -12,6 +12,7 @@ import type {
   Strategy,
   Tokens,
 } from "../types";
+import { setServerOnline } from "../lib/serverStatus";
 
 const TOKEN_KEY = "lucid_access_token";
 
@@ -32,7 +33,18 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   };
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
-  const response = await fetch(path, { ...options, headers });
+  let response: Response;
+  try {
+    response = await fetch(path, { ...options, headers });
+  } catch (err) {
+    // Network-level failure (server down/unreachable, DNS, CORS, offline) — anything
+    // else (including a 4xx/5xx) means the server did answer, so only this branch
+    // flips the app into the "server unreachable" gray-out state.
+    setServerOnline(false);
+    throw err;
+  }
+  setServerOnline(true);
+
   if (!response.ok) {
     const detail = await response.text();
     throw new Error(`${response.status}: ${detail}`);
