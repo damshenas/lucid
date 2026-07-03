@@ -36,8 +36,8 @@ services:
     ports:
       - "8686:8686"
     tmpfs:
-      - /tmp
-      - /run
+      - /tmp:mode=1777
+      - /run:mode=1777
     volumes:
       - /container/lucid/data:/data:rw,z
       - /container/lucid/ext-strategies:/ext_strategies:rw,z
