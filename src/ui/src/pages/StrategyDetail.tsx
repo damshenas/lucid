@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
-import { ArrowDownRight, ArrowUpRight, ChevronLeft, ChevronRight, Inbox } from "lucide-react";
+import { useParams } from "react-router-dom";
+import { ArrowDownRight, ArrowUpRight, ChevronLeft, ChevronRight, Inbox, LineChart } from "lucide-react";
 import { api } from "../api/client";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
-import type { Signal } from "../types";
+import { humanize } from "./settings/schemaTree";
+import type { Signal, Strategy } from "../types";
 
 const PAGE_SIZE = 50;
 
@@ -13,22 +15,85 @@ const STATUS_TONE: Record<string, "cyan" | "rose" | "neutral"> = {
   blocked: "rose",
 };
 
-export function Signals() {
+/**
+ * Per-strategy page, linked from the sidebar for whichever strategy is currently
+ * active (see hooks/useActiveStrategies.ts). What it shows beyond the strategy's own
+ * info card depends entirely on that strategy's self-declared `features` (e.g.
+ * trend_follow declares `["signals"]` — see strategies/buy/trend_follow.py) — not
+ * every strategy produces the same kind of data.
+ */
+export function StrategyDetail() {
+  const { name = "" } = useParams<{ name: string }>();
+  const [strategy, setStrategy] = useState<Strategy | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLoaded(false);
+    setStrategy(null);
+    api
+      .strategies()
+      .then((all) => setStrategy(all.find((s) => s.name === name) ?? null))
+      .catch((e) => setError((e as Error).message))
+      .finally(() => setLoaded(true));
+  }, [name]);
+
+  return (
+    <div className="animate-fade-in-up space-y-4">
+      <h2 className="text-xl font-semibold tracking-tight">{humanize(name)}</h2>
+
+      {error && (
+        <p className="rounded-xl border border-rose/30 bg-rose/10 px-3 py-2 text-sm text-rose">
+          {error}
+        </p>
+      )}
+
+      {!loaded ? (
+        <p className="py-6 text-center text-sm text-white/40">Loading…</p>
+      ) : !strategy ? (
+        <Card className="flex flex-col items-center gap-2 py-10 text-center text-white/50">
+          <LineChart size={28} className="text-white/30" />
+          <p className="text-sm">Strategy not found (it may no longer be active).</p>
+        </Card>
+      ) : (
+        <>
+          <Card>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-semibold">{strategy.name}</span>
+              <Badge tone={strategy.direction === "buy" ? "cyan" : "rose"}>{strategy.direction}</Badge>
+              <Badge tone={strategy.is_builtin ? "violet" : "neutral"}>
+                {strategy.is_builtin ? "native" : "custom"}
+              </Badge>
+            </div>
+            {strategy.description && (
+              <p className="mt-2 text-sm text-white/60">{strategy.description}</p>
+            )}
+            <p className="mt-1 text-xs text-white/40">v{strategy.version ?? "—"}</p>
+          </Card>
+
+          {strategy.features.includes("signals") && <StrategySignals source={strategy.name} />}
+        </>
+      )}
+    </div>
+  );
+}
+
+function StrategySignals({ source }: { source: string }) {
   const [signals, setSignals] = useState<Signal[]>([]);
   const [offset, setOffset] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     api
-      .signals(PAGE_SIZE, offset)
+      .signals(PAGE_SIZE, offset, source)
       .then(setSignals)
       .catch((e) => setError((e as Error).message));
-  }, [offset]);
+  }, [offset, source]);
 
   return (
-    <div className="animate-fade-in-up space-y-4">
+    <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold tracking-tight">Signals</h2>
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-white/40">Signals</h3>
         <div className="flex items-center gap-2">
           <Button
             variant="secondary"
@@ -56,7 +121,7 @@ export function Signals() {
       {signals.length === 0 ? (
         <Card className="flex flex-col items-center gap-2 py-10 text-center text-white/50">
           <Inbox size={28} className="text-white/30" />
-          <p className="text-sm">No signals.</p>
+          <p className="text-sm">No signals yet.</p>
         </Card>
       ) : (
         <Card className="overflow-hidden !p-0">
@@ -66,7 +131,6 @@ export function Signals() {
                 <th className="px-4 py-3 font-medium">Ticker</th>
                 <th className="px-4 py-3 font-medium">Direction</th>
                 <th className="px-4 py-3 font-medium">Confidence</th>
-                <th className="px-4 py-3 font-medium">Source</th>
                 <th className="px-4 py-3 font-medium">Status</th>
               </tr>
             </thead>
@@ -85,7 +149,6 @@ export function Signals() {
                     </span>
                   </td>
                   <td className="px-4 py-3">{s.confidence}</td>
-                  <td className="px-4 py-3 text-white/60">{s.source}</td>
                   <td className="px-4 py-3">
                     <Badge tone={STATUS_TONE[s.status] ?? "neutral"}>{s.status}</Badge>
                   </td>

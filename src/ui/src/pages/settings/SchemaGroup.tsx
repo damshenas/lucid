@@ -1,4 +1,5 @@
 import { Card } from "../../components/ui/Card";
+import { Select } from "../../components/ui/Select";
 import { Tabs } from "../../components/ui/Tabs";
 import { Toggle } from "../../components/ui/Toggle";
 import type { SchemaField } from "../../types";
@@ -26,6 +27,27 @@ function Field({ fieldKey, meta, current, readOnly, onChange }: FieldProps) {
           label={label}
         />
       </div>
+    );
+  }
+
+  // Anything with a known, limited set of values (e.g. logger.level,
+  // execution.quantity_mode) gets a dropdown instead of a free-text input.
+  if (meta.choices && meta.choices.length > 0) {
+    return (
+      <label className="block">
+        <span className="mb-1 block text-sm text-white/80">{label}</span>
+        <Select
+          value={String(current ?? "")}
+          onChange={(e) => onChange(fieldKey, e.target.value, meta.type)}
+          disabled={readOnly}
+        >
+          {meta.choices.map((choice) => (
+            <option key={choice} value={choice} className="bg-surface">
+              {choice}
+            </option>
+          ))}
+        </Select>
+      </label>
     );
   }
 

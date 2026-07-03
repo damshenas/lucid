@@ -19,10 +19,13 @@ router = APIRouter(prefix="/api/v1/signals", tags=["signals"])
 async def list_signals(
     limit: int = Query(default=50, le=200),
     offset: int = 0,
+    source: str | None = Query(default=None),
     session: AsyncSession = Depends(get_session),
     user: User = Depends(get_current_user),
 ) -> list[dict[str, Any]]:
-    signals = await SignalRepository(session).list_by_user(user.id, limit=limit, offset=offset)
+    signals = await SignalRepository(session).list_by_user(
+        user.id, limit=limit, offset=offset, source=source
+    )
     return [
         {
             "ticker": s.ticker,

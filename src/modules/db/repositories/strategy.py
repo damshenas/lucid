@@ -32,6 +32,7 @@ class StrategyRepository(BaseRepository[StrategyRegistry]):
         is_builtin: bool = False,
         version: str | None = None,
         description: str | None = None,
+        features: list[str] | None = None,
     ) -> StrategyRegistry:
         now = datetime.now(timezone.utc)
         existing = await self.get_by_name(name)
@@ -41,6 +42,7 @@ class StrategyRepository(BaseRepository[StrategyRegistry]):
             existing.is_builtin = is_builtin
             existing.version = version
             existing.description = description
+            existing.features = features
             existing.last_scanned_at = now
             await self.session.flush()
             return existing
@@ -51,6 +53,7 @@ class StrategyRepository(BaseRepository[StrategyRegistry]):
             is_builtin=is_builtin,
             version=version,
             description=description,
+            features=features,
             last_scanned_at=now,
         )
 

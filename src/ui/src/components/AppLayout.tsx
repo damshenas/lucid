@@ -5,7 +5,9 @@ import { IconButton } from "./ui/IconButton";
 import { Sidebar } from "./Sidebar";
 import { BottomNav } from "./BottomNav";
 import { MoreSheet } from "./MoreSheet";
-import { NAV_ITEMS } from "../lib/nav";
+import { useActiveStrategies } from "../hooks/useActiveStrategies";
+import { NAV_ITEMS, STRATEGY_NAV_ICON, type NavItem } from "../lib/nav";
+import { humanize } from "../pages/settings/schemaTree";
 import { hasPermission } from "../lib/permissions";
 import type { Role } from "../lib/permissions";
 
@@ -19,10 +21,27 @@ const PRIMARY_COUNT = 3;
 export function AppLayout({ role, onLogout }: Props) {
   const location = useLocation();
   const [moreOpen, setMoreOpen] = useState(false);
+  const { strategies: activeStrategies } = useActiveStrategies();
+
+  // Every currently-active strategy (buy and/or sell) gets its own sidebar entry —
+  // gated the same as the old Signals page (view_trading) since it's the same
+  // trading-facing audience. See pages/StrategyDetail.tsx.
+  const strategyNavItems: NavItem[] = useMemo(
+    () =>
+      activeStrategies.map((s) => ({
+        path: `/strategy/${s.name}`,
+        label: humanize(s.name),
+        icon: STRATEGY_NAV_ICON,
+        permission: "view_trading",
+        group: "Strategies",
+      })),
+    [activeStrategies],
+  );
 
   const items = useMemo(
-    () => NAV_ITEMS.filter((item) => hasPermission(role, item.permission)),
-    [role],
+    () =>
+      [...NAV_ITEMS, ...strategyNavItems].filter((item) => hasPermission(role, item.permission)),
+    [role, strategyNavItems],
   );
   const primary = items.slice(0, PRIMARY_COUNT);
   const overflow = items.slice(PRIMARY_COUNT);

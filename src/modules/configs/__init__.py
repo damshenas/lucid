@@ -143,6 +143,15 @@ def _field_default(info: FieldInfo) -> Any:
     return default
 
 
+def _choices(annotation: Any) -> list[str] | None:
+    """Allowed values for an enum-typed field, so the UI can render a dropdown
+    instead of a free-text input (e.g. ``logger.level``, ``execution.quantity_mode``)."""
+    annotation = _unwrap_optional(annotation)
+    if isinstance(annotation, type) and issubclass(annotation, enum.Enum):
+        return [item.value for item in annotation]
+    return None
+
+
 def _model_fields(model_cls: type[BaseModel], prefix: str = "") -> dict[str, dict[str, Any]]:
     out: dict[str, dict[str, Any]] = {}
     for name, info in model_cls.model_fields.items():
@@ -151,11 +160,15 @@ def _model_fields(model_cls: type[BaseModel], prefix: str = "") -> dict[str, dic
         if isinstance(annotation, type) and issubclass(annotation, BaseModel):
             out.update(_model_fields(annotation, prefix=f"{key}."))
         else:
-            out[key] = {
+            meta: dict[str, Any] = {
                 "type": _type_name(info.annotation),
                 "default": _field_default(info),
                 "required": info.is_required(),
             }
+            choices = _choices(info.annotation)
+            if choices is not None:
+                meta["choices"] = choices
+            out[key] = meta
     return out
 
 

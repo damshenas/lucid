@@ -24,6 +24,14 @@ class QuantityMode(str, Enum):
     half_kelly = "half_kelly"
 
 
+class LogLevel(str, Enum):
+    debug = "DEBUG"
+    info = "INFO"
+    warning = "WARNING"
+    error = "ERROR"
+    critical = "CRITICAL"
+
+
 class ExecutionConfig(BaseModel):
     quantity_mode: QuantityMode = QuantityMode.fixed_usd
     fixed_usd: float = 100.0
@@ -61,7 +69,7 @@ class BrokerConfig(BaseModel):
 
 
 class LoggerConfig(BaseModel):
-    level: str = "INFO"
+    level: LogLevel = LogLevel.info
     file_path: str | None = "/data/lucid.log"
 
 

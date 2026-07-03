@@ -35,24 +35,36 @@ export function Sidebar({ items }: Props) {
             <span className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-white/30">
               {group}
             </span>
-            {groupItems.map(({ path, label, icon: Icon }) => (
-              <NavLink
-                key={path}
-                to={path}
-                end={path === "/"}
-                className={({ isActive }) =>
-                  `flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-200
-                  ${
-                    isActive
-                      ? "bg-white/10 text-white glow-violet"
-                      : "text-white/60 hover:bg-white/5 hover:text-white/90"
-                  }`
-                }
-              >
-                <Icon size={18} strokeWidth={2} />
-                {label}
-              </NavLink>
-            ))}
+            {groupItems.map(({ path, label, icon: Icon, disabled }) =>
+              disabled ? (
+                <span
+                  key={path}
+                  aria-disabled="true"
+                  title="Temporarily disabled"
+                  className="flex cursor-not-allowed items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-white/25"
+                >
+                  <Icon size={18} strokeWidth={2} />
+                  {label}
+                </span>
+              ) : (
+                <NavLink
+                  key={path}
+                  to={path}
+                  end={path === "/"}
+                  className={({ isActive }) =>
+                    `flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-200
+                    ${
+                      isActive
+                        ? "bg-white/10 text-white glow-violet"
+                        : "text-white/60 hover:bg-white/5 hover:text-white/90"
+                    }`
+                  }
+                >
+                  <Icon size={18} strokeWidth={2} />
+                  {label}
+                </NavLink>
+              ),
+            )}
           </div>
         ))}
       </nav>

@@ -23,24 +23,36 @@ export function MoreSheet({ open, items, onClose }: Props) {
           <IconButton icon={<X size={18} />} label="Close" onClick={onClose} />
         </div>
         <div className="grid grid-cols-3 gap-3">
-          {items.map(({ path, label, icon: Icon }) => (
-            <NavLink
-              key={path}
-              to={path}
-              onClick={onClose}
-              className={({ isActive }) =>
-                `flex flex-col items-center gap-2 rounded-2xl border px-3 py-4 text-xs font-medium transition-colors
-                ${
-                  isActive
-                    ? "border-violet/40 bg-violet/10 text-violet"
-                    : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10"
-                }`
-              }
-            >
-              <Icon size={20} strokeWidth={1.75} />
-              {label}
-            </NavLink>
-          ))}
+          {items.map(({ path, label, icon: Icon, disabled }) =>
+            disabled ? (
+              <span
+                key={path}
+                aria-disabled="true"
+                title="Temporarily disabled"
+                className="flex cursor-not-allowed flex-col items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-3 py-4 text-xs font-medium text-white/25"
+              >
+                <Icon size={20} strokeWidth={1.75} />
+                {label}
+              </span>
+            ) : (
+              <NavLink
+                key={path}
+                to={path}
+                onClick={onClose}
+                className={({ isActive }) =>
+                  `flex flex-col items-center gap-2 rounded-2xl border px-3 py-4 text-xs font-medium transition-colors
+                  ${
+                    isActive
+                      ? "border-violet/40 bg-violet/10 text-violet"
+                      : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10"
+                  }`
+                }
+              >
+                <Icon size={20} strokeWidth={1.75} />
+                {label}
+              </NavLink>
+            ),
+          )}
         </div>
       </div>
     </div>

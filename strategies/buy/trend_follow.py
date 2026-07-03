@@ -12,6 +12,10 @@ from src.modules.strategy.context import StrategyContext
 STRATEGY_NAME = "trend_follow"
 STRATEGY_VERSION = "1.0.0"
 STRATEGY_DESCRIPTION = "Buy in an uptrend (SMA50 > SMA200) while RSI is below the cap."
+# Tells the UI's per-strategy page to show the signals feed (filtered to this
+# strategy's own signals) — see src/modules/strategy/loader.py and
+# pages/StrategyDetail.tsx. No other built-in strategy uses this yet.
+FEATURES = ["signals"]
 
 CONFIG_SCHEMA = {
     "rsi_max": {"type": "float", "default": 70.0, "required": False},

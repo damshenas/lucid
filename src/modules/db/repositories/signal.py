@@ -33,14 +33,13 @@ class SignalRepository(BaseRepository[Signal]):
         result = await self.session.execute(stmt)
         return result.scalars().first()
 
-    async def list_by_user(self, user_id: int, *, limit: int = 50, offset: int = 0) -> list[Signal]:
-        stmt = (
-            select(Signal)
-            .where(Signal.user_id == user_id)
-            .order_by(Signal.id.desc())
-            .limit(limit)
-            .offset(offset)
-        )
+    async def list_by_user(
+        self, user_id: int, *, limit: int = 50, offset: int = 0, source: str | None = None
+    ) -> list[Signal]:
+        stmt = select(Signal).where(Signal.user_id == user_id)
+        if source is not None:
+            stmt = stmt.where(Signal.source == source)
+        stmt = stmt.order_by(Signal.id.desc()).limit(limit).offset(offset)
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 

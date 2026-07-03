@@ -23,6 +23,7 @@ def _serialize(row: Any) -> dict[str, Any]:
         "is_builtin": row.is_builtin,
         "description": row.description,
         "file_path": row.file_path,
+        "features": row.features or [],
     }
 
 

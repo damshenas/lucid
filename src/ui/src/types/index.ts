@@ -20,6 +20,9 @@ export interface Strategy {
   is_builtin: boolean;
   description: string | null;
   file_path: string;
+  /** UI feature tags the strategy declares itself (e.g. ["signals"]) — see
+   * pages/StrategyDetail.tsx. */
+  features: string[];
 }
 
 export interface SchemaField {
@@ -27,6 +30,8 @@ export interface SchemaField {
   default: unknown;
   required?: boolean;
   value: unknown;
+  /** Allowed values for an "enum" type field — rendered as a dropdown when present. */
+  choices?: string[];
 }
 
 export type SettingsSchema = Record<string, Record<string, SchemaField>>;

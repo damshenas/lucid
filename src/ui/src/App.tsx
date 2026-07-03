@@ -12,8 +12,7 @@ import { Orders } from "./pages/Orders";
 import { Positions } from "./pages/Positions";
 import { Prices } from "./pages/Prices";
 import { Settings } from "./pages/Settings";
-import { Signals } from "./pages/Signals";
-import { Strategies } from "./pages/Strategies";
+import { StrategyDetail } from "./pages/StrategyDetail";
 import { Users } from "./pages/Users";
 
 export function App() {
@@ -48,10 +47,10 @@ export function App() {
             }
           />
           <Route
-            path="signals"
+            path="strategy/:name"
             element={
               <RequirePermission role={role} permission="view_trading">
-                <Signals />
+                <StrategyDetail />
               </RequirePermission>
             }
           />
@@ -68,14 +67,6 @@ export function App() {
             element={
               <RequirePermission role={role} permission="view_trading">
                 <Prices />
-              </RequirePermission>
-            }
-          />
-          <Route
-            path="strategies"
-            element={
-              <RequirePermission role={role} permission="edit_own_strategies">
-                <Strategies />
               </RequirePermission>
             }
           />

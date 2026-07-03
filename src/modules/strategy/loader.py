@@ -1,7 +1,9 @@
 """Discover and load single-file strategies from ``strategies/buy`` and ``strategies/sell``.
 
 Each strategy file must export ``STRATEGY_NAME``, ``STRATEGY_VERSION``, ``CONFIG_SCHEMA``
-and an ``async def run(context)``. Optional: ``STRATEGY_DESCRIPTION``.
+and an ``async def run(context)``. Optional: ``STRATEGY_DESCRIPTION``, ``FEATURES`` (a
+list of UI feature tags the strategy uses, e.g. ``["signals"]`` — see
+pages/StrategyDetail.tsx for how these drive the per-strategy sidebar page).
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ class LoadedStrategy:
     file_path: str
     is_builtin: bool
     description: str | None
+    features: list[str]
     config_schema: dict[str, dict[str, Any]]
     run: RunFn
     module: ModuleType
@@ -71,6 +74,7 @@ def load_strategy_file(path: Path, direction: str, builtin_root: str | Path | No
         file_path=f"strategies/{direction}/{path.name}",
         is_builtin=_is_builtin_file(path, direction, builtin_root),
         description=getattr(module, "STRATEGY_DESCRIPTION", None),
+        features=list(getattr(module, "FEATURES", [])),
         config_schema=dict(_require(module, "CONFIG_SCHEMA", path)),
         run=run,
         module=module,

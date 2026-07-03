@@ -4,6 +4,7 @@ import { ArrowDownRight, ArrowUpRight, Briefcase, Radio, Receipt } from "lucide-
 import { api } from "../api/client";
 import { Badge } from "../components/ui/Badge";
 import { Card } from "../components/ui/Card";
+import { useActiveStrategies } from "../hooks/useActiveStrategies";
 import type { Order, Position, Signal } from "../types";
 
 export function Dashboard() {
@@ -11,6 +12,11 @@ export function Dashboard() {
   const [signals, setSignals] = useState<Signal[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // Signals belong to whichever active strategy produced them (see
+  // pages/StrategyDetail.tsx) — "View all" links there instead of a generic
+  // /signals page, which no longer exists.
+  const { strategies: activeStrategies } = useActiveStrategies();
+  const signalsStrategy = activeStrategies.find((s) => s.features.includes("signals"));
 
   useEffect(() => {
     Promise.all([api.positions(), api.signals(5, 0), api.orders(5, 0)])
@@ -68,9 +74,14 @@ export function Dashboard() {
             <h3 className="text-sm font-semibold uppercase tracking-wide text-white/40">
               Latest signals
             </h3>
-            <Link to="/signals" className="text-xs font-medium text-violet hover:text-violet/80">
-              View all
-            </Link>
+            {signalsStrategy && (
+              <Link
+                to={`/strategy/${signalsStrategy.name}`}
+                className="text-xs font-medium text-violet hover:text-violet/80"
+              >
+                View all
+              </Link>
+            )}
           </div>
           {signals.length === 0 ? (
             <p className="py-6 text-center text-sm text-white/40">No signals yet.</p>

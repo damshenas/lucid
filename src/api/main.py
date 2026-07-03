@@ -27,7 +27,7 @@ from .runtime import TradingRuntime
 from .v1 import (
     admin,
     auth,
-    backtesting,
+    # backtesting,  # feature temporarily disabled — see pages/Backtesting.tsx
     credentials,
     orders,
     positions,
@@ -92,7 +92,7 @@ def create_app(context: AppContext | None = None) -> FastAPI:
         credentials,
         strategies,
         prices,
-        backtesting,
+        # backtesting,  # feature temporarily disabled
         admin,
     ):
         app.include_router(module.router)

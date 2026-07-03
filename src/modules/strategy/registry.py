@@ -57,6 +57,7 @@ class StrategyRegistryService:
                     is_builtin=strategy.is_builtin,
                     version=strategy.version,
                     description=strategy.description,
+                    features=strategy.features,
                 )
             )
         # Reconcile away rows for strategies no longer discovered under that name —

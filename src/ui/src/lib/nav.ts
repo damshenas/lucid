@@ -6,7 +6,6 @@ import {
   FlaskConical,
   LayoutDashboard,
   LineChart,
-  Radio,
   Receipt,
   Settings as SettingsIcon,
   ShieldCheck,
@@ -21,27 +20,28 @@ export interface NavItem {
   permission: Permission;
   /** Function-based grouping used by the desktop sidebar (see components/Sidebar.tsx). */
   group: string;
+  /** Shown but not navigable (greyed out) — used for temporarily-disabled features. */
+  disabled?: boolean;
 }
+
+/** Icon for a per-active-strategy sidebar entry (see hooks/useActiveStrategies.ts and
+ * components/AppLayout.tsx) — every active strategy gets the same icon regardless of
+ * direction or what it displays. */
+export const STRATEGY_NAV_ICON = LineChart;
 
 export const NAV_ITEMS: NavItem[] = [
   { path: "/", label: "Dashboard", icon: LayoutDashboard, permission: "view_trading", group: "Trading" },
   { path: "/positions", label: "Positions", icon: Briefcase, permission: "view_trading", group: "Trading" },
-  { path: "/signals", label: "Signals", icon: Radio, permission: "view_trading", group: "Trading" },
   { path: "/orders", label: "Orders", icon: Receipt, permission: "view_trading", group: "Trading" },
   { path: "/prices", label: "Prices", icon: CandlestickChart, permission: "view_trading", group: "Trading" },
-  {
-    path: "/strategies",
-    label: "Strategies",
-    icon: LineChart,
-    permission: "edit_own_strategies",
-    group: "Strategies",
-  },
   {
     path: "/backtesting",
     label: "Backtesting",
     icon: FlaskConical,
     permission: "edit_own_strategies",
     group: "Strategies",
+    // Temporarily disabled (see src/api/main.py) — kept visible but not navigable.
+    disabled: true,
   },
   {
     path: "/jobs",

@@ -78,6 +78,7 @@ export const api = {
       method: "PATCH",
     }),
   settingsSchema: () => request<SettingsSchema>("/api/v1/settings/schema"),
+  settingsValues: () => request<Record<string, unknown>>("/api/v1/settings"),
   saveSettings: (values: Record<string, unknown>) =>
     request<{ ok: boolean }>("/api/v1/settings", {
       method: "POST",
@@ -90,8 +91,10 @@ export const api = {
     ),
   orders: (limit = 50, offset = 0) =>
     request<Order[]>(`/api/v1/orders?limit=${limit}&offset=${offset}`),
-  signals: (limit = 50, offset = 0) =>
-    request<Signal[]>(`/api/v1/signals?limit=${limit}&offset=${offset}`),
+  signals: (limit = 50, offset = 0, source?: string) =>
+    request<Signal[]>(
+      `/api/v1/signals?limit=${limit}&offset=${offset}${source ? `&source=${encodeURIComponent(source)}` : ""}`,
+    ),
   priceBars: (ticker: string, interval = "1d", limit = 250) =>
     request<PriceBars>(
       `/api/v1/prices/${encodeURIComponent(ticker)}?interval=${encodeURIComponent(interval)}&limit=${limit}`,

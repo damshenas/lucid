@@ -4,11 +4,17 @@ import { api } from "../api/client";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
+import { Select } from "../components/ui/Select";
 import type { Position } from "../types";
+
+// Mirrors AssetClass in src/conf/schema.py — kept as a fixed list (like
+// pages/Backtesting.tsx's INTERVALS) so the sync target is always one of the
+// backend's known values rather than free text.
+const ASSET_CLASSES = ["equity", "commodity", "crypto", "fx"];
 
 export function Positions() {
   const [positions, setPositions] = useState<Position[]>([]);
-  const [assetClass, setAssetClass] = useState("equity");
+  const [assetClass, setAssetClass] = useState(ASSET_CLASSES[0]);
   const [error, setError] = useState<string | null>(null);
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -39,12 +45,17 @@ export function Positions() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-xl font-semibold tracking-tight">Positions</h2>
         <div className="flex items-center gap-2">
-          <input
+          <Select
             value={assetClass}
             onChange={(e) => setAssetClass(e.target.value)}
-            placeholder="asset class"
-            className="w-28 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none transition-colors focus:border-violet/50 focus:glow-violet"
-          />
+            className="w-32"
+          >
+            {ASSET_CLASSES.map((ac) => (
+              <option key={ac} value={ac} className="bg-surface">
+                {ac}
+              </option>
+            ))}
+          </Select>
           <Button variant="secondary" onClick={sync} disabled={syncing}>
             <RefreshCw size={16} className={syncing ? "animate-spin" : ""} />
             Sync
