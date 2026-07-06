@@ -1,5 +1,9 @@
 # Lucid — Strategy Authoring
 
+See **`strategies/README.md`** for the full, example-driven authoring guide (aimed at
+anyone — human or LLM — writing a new strategy file). This page is the shorter
+reference version.
+
 Each strategy is a **single `.py` file**, flat in `strategies/buy/` or `strategies/sell/`.
 No subdirectories. Files are discovered at startup and via
 `POST /api/v1/strategies/scan` (manual rescan) — there is no recurring scan job.
@@ -31,7 +35,9 @@ pages/StrategyDetail.tsx) — return a real explanation for every branch, not ju
 acted-on case.
 
 Optional module attributes: `STRATEGY_DESCRIPTION: str`, `FEATURES: list[str]` (UI
-feature tags, e.g. `["signals"]` to also show the signals feed on the strategy's page).
+feature tags, e.g. `["signals"]` to also show the signals feed on the strategy's page),
+`EXTERNAL_SOURCES: list[str]` (third-party ratings — e.g. `["zacks"]` — to fetch before
+every `run()`; see "External signal sources" below).
 
 "Native" vs "custom" (shown as a tag in the UI) is derived automatically from actual
 file origin, not a self-declared flag: a file only counts as native if it's
@@ -49,6 +55,7 @@ deploys into `STRATEGIES_ROOT` — including a same-named override of a built-in
 | `config` | resolved config dict for the user |
 | `price_data` | pandas OHLCV DataFrame (lowercase columns) |
 | `position` | `PositionView(ticker, quantity, avg_price)` or `None` |
+| `external_signals` | `list[ExternalSignal]` — populated only for sources declared via `EXTERNAL_SOURCES`; `[]` otherwise |
 
 `context.strategy_config(STRATEGY_NAME)` returns your strategy's config sub-dict. The keys
 in `CONFIG_SCHEMA` are folded into the user's Settings form automatically.
@@ -106,6 +113,25 @@ Each user has an active buy and sell strategy (config keys
 Settings > Strategy or `PATCH /api/v1/strategies/{name}/activate?direction=buy`.
 Once active, its decision log is available in the sidebar (see
 `GET /api/v1/strategies/{name}/decisions` and pages/StrategyDetail.tsx).
+
+Activating a strategy doesn't mean every ticker gets evaluated the same way — buy and
+sell deliberately use different ticker sources (see `TradingRuntime.run_strategies` in
+`src/api/runtime.py`): a **sell** strategy runs over every ticker the user has an
+**open position** in (no configuration needed — the position itself is the
+universe), while a **buy** strategy runs over the shared **price watchlist**
+(`/api/v1/prices/watchlist`) since deciding what to *consider* buying requires a
+curated candidate list. An empty watchlist means buy strategies never fire; it has no
+effect on sell strategies.
+
+## External signal sources
+
+A strategy can declare `EXTERNAL_SOURCES = ["zacks", "tradingview"]` to have the
+runtime fetch normalized third-party ratings (Finviz/TradingView/Zacks/Barchart — see
+`src/modules/signal/sources.py`) before each `run()`, available via
+`context.external_signals` / `context.external_signal(name)`. A source only
+participates once its credentials are configured (`/api/v1/credentials`); check
+status with `GET /api/v1/signals/sources` or test on demand with
+`POST /api/v1/signals/sources/check`.
 
 ## Distribution via git
 

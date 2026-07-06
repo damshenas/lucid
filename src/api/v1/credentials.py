@@ -39,6 +39,23 @@ CREDENTIAL_CATALOG: list[dict[str, Any]] = [
         "platform": "Trading212",
         "secret": False,
     },
+    # External signal-source connectors (src/modules/signal/sources.py) — a source
+    # only participates (for a strategy's EXTERNAL_SOURCES, or the manual
+    # POST /api/v1/signals/sources/check) once its base_url credential is set here;
+    # api_key is optional (depends on the provider).
+    *(
+        item
+        for platform, key_prefix in (
+            ("Finviz", "finviz"),
+            ("TradingView", "tradingview"),
+            ("Zacks", "zacks"),
+            ("Barchart", "barchart"),
+        )
+        for item in (
+            {"key": f"{key_prefix}_base_url", "label": "Base URL", "platform": platform, "secret": False},
+            {"key": f"{key_prefix}_api_key", "label": "API Key", "platform": platform, "secret": True},
+        )
+    ),
 ]
 _KNOWN_KEYS = {item["key"] for item in CREDENTIAL_CATALOG}
 

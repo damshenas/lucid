@@ -9,7 +9,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.modules.bus import BuySignalEvent
 from src.modules.cache import TTLCache
 from src.modules.db.repositories.user import UserRepository
+from src.modules.encryption import CredentialManager, Encryptor, generate_key
 from src.modules.signal import SignalService
+from src.modules.signal import sources as sources_module
+from src.modules.signal.sources import ExternalSignal, SignalSourceRegistry, _Source
+
+
+def _encryptor() -> Encryptor:
+    import base64
+
+    return Encryptor(base64.b64decode(generate_key()))
 
 
 async def _user(session: AsyncSession) -> int:
@@ -69,3 +78,85 @@ async def test_record_outcome(session: AsyncSession) -> None:
     assert len(outcomes) == 1
     assert outcomes[0].profitable is True
     assert outcomes[0].pnl == 42.0
+
+
+class _FakeConnector:
+    """Stand-in for a real com.* connector — same shape (base_url/api_key/client
+    constructor args, an async fetch method, ``aclose``) without any network call."""
+
+    def __init__(self, base_url: str, *, api_key: str | None = None, client=None) -> None:
+        self.base_url = base_url
+        self.api_key = api_key
+
+    async def fetch_rank(self, ticker: str) -> dict:
+        return {"rank": 1, "ticker": ticker}
+
+    async def aclose(self) -> None:
+        pass
+
+
+class _FailingConnector(_FakeConnector):
+    async def fetch_rank(self, ticker: str) -> dict:
+        raise RuntimeError("boom")
+
+
+async def test_source_not_configured_returns_error_not_raise(session: AsyncSession) -> None:
+    mgr = CredentialManager(session, _encryptor())
+    registry = SignalSourceRegistry(mgr, user_id=None)
+    results = await registry.fetch("AAPL", ["zacks"])
+    assert results == [ExternalSignal(source="zacks", ticker="AAPL", direction=None, error="not configured")]
+
+
+async def test_source_normalizes_rating_once_configured(
+    session: AsyncSession, monkeypatch
+) -> None:
+    monkeypatch.setitem(
+        sources_module._SOURCES,
+        "zacks",
+        _Source(_FakeConnector, "fetch_rank", sources_module._zacks_direction),
+    )
+    mgr = CredentialManager(session, _encryptor())
+    await mgr.set_for_user("zacks_base_url", "https://zacks.test", user_id=None)
+
+    result = (await SignalSourceRegistry(mgr, user_id=None).fetch("AAPL", ["zacks"]))[0]
+
+    assert result == ExternalSignal(
+        source="zacks", ticker="AAPL", direction="buy", raw={"rank": 1, "ticker": "AAPL"}
+    )
+
+
+async def test_source_error_is_captured_not_raised(session: AsyncSession, monkeypatch) -> None:
+    monkeypatch.setitem(
+        sources_module._SOURCES,
+        "zacks",
+        _Source(_FailingConnector, "fetch_rank", sources_module._zacks_direction),
+    )
+    mgr = CredentialManager(session, _encryptor())
+    await mgr.set_for_user("zacks_base_url", "https://zacks.test", user_id=None)
+
+    result = (await SignalSourceRegistry(mgr, user_id=None).fetch("AAPL", ["zacks"]))[0]
+
+    assert result.direction is None
+    assert result.error == "boom"
+
+
+def test_direction_from_rating_parses_text_and_numeric() -> None:
+    parse = sources_module._direction_from_rating
+    assert parse("Strong Buy") == "buy"
+    assert parse("strong_sell") == "sell"
+    assert parse("Hold") == "hold"
+    assert parse(0.5) == "buy"
+    assert parse(-0.5) == "sell"
+    assert parse(0.0) == "hold"
+    assert parse(None) is None
+    assert parse("unrelated text") is None
+
+
+def test_zacks_direction_maps_rank_to_buy_sell_hold() -> None:
+    parse = sources_module._zacks_direction
+    assert parse({"rank": 1}) == "buy"
+    assert parse({"rank": 2}) == "buy"
+    assert parse({"rank": 3}) == "hold"
+    assert parse({"rank": 4}) == "sell"
+    assert parse({"rank": 5}) == "sell"
+    assert parse({"rank": None}) is None

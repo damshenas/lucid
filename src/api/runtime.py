@@ -21,7 +21,9 @@ from src.modules.logger import get_logger
 from src.modules.price import storage
 from src.modules.price.pipeline import PricePipeline
 from src.modules.schedules import Scheduler
+from src.modules.signal.sources import ExternalSignal, SignalSourceRegistry
 from src.modules.strategy.context import PositionView, StrategyContext, StrategyDecision
+from src.modules.strategy.loader import LoadedStrategy
 
 from .context import AppContext
 
@@ -61,9 +63,14 @@ class TradingRuntime:
     # -- scheduled jobs ----------------------------------------------------
 
     async def _watchlist(self) -> list[str]:
+        """Tickers the price pipeline keeps fetching: the (buy-screening) watchlist
+        plus every ticker any user currently holds an open position in — so a held
+        position keeps getting fresh bars (and can still be sold) even after it's
+        removed from the watchlist (see run_strategies below)."""
         async with self.ctx.db.session() as session:
-            rows = await PriceWatchlistRepository(session).list_enabled()
-        return [r.ticker for r in rows]
+            watchlist_tickers = {r.ticker for r in await PriceWatchlistRepository(session).list_enabled()}
+            position_tickers = {r.ticker for r in await PositionRepository(session).list_all_open()}
+        return sorted(watchlist_tickers | position_tickers)
 
     async def _mark_fetched(self, ticker: str, interval: str, _rows: int) -> None:
         async with self.ctx.db.transaction() as session:
@@ -79,7 +86,20 @@ class TradingRuntime:
         )
 
     async def run_strategies(self) -> None:
-        """Run active buy/sell strategies for each trader over the watchlist."""
+        """Run each trader's active sell strategy over their own open positions, and
+        their active buy strategy over the (shared) price watchlist.
+
+        These two have deliberately different ticker sources: a sell strategy only
+        ever needs to look at what a user already holds (``PositionRepository.
+        list_all_open`` — a position is itself the "universe", nothing extra to
+        configure), so it's independent of the watchlist and runs even for a ticker
+        that was never added there or was later removed from it. A buy strategy has
+        no such built-in universe — deciding what to *consider* buying requires a
+        user-curated list of candidate tickers, which is exactly what the watchlist
+        is for (Prices page > Watchlist / ``GET-POST-PATCH-DELETE /api/v1/prices/
+        watchlist``). Activating a strategy alone is therefore only a no-op for the
+        buy side when the watchlist is empty — the sell side always runs.
+        """
         async with self.ctx.db.session() as session:
             users = [
                 u
@@ -97,8 +117,9 @@ class TradingRuntime:
         )
         if not watchlist:
             _logger.debug(
-                "run_strategies: watchlist is empty — no ticker will ever produce a "
-                "signal until one is added (Prices page > Watchlist)"
+                "run_strategies: watchlist is empty — no *buy* signal will ever be "
+                "produced until a candidate ticker is added (Prices page > Watchlist); "
+                "sell strategies are unaffected, they run over open positions instead"
             )
 
         storage_path = self.ctx.settings.price.storage_path
@@ -119,53 +140,89 @@ class TradingRuntime:
             if buy is None and sell is None:
                 continue
 
-            for item in watchlist:
-                df = storage.read_bars(storage_path, item.ticker, "1d")
-                if df is None or df.empty:
-                    _logger.debug(
-                        "run_strategies: no stored bars for %s — skipping (backfill it first)",
-                        item.ticker,
-                    )
-                    continue
-                try:
-                    await self._evaluate_ticker(user.id, item, df, values, buy, sell)
-                except Exception as exc:  # noqa: BLE001
-                    _logger.warning("strategy eval failed %s/%s: %s", user.id, item.ticker, exc)
+            if sell is not None:
+                async with self.ctx.db.session() as session:
+                    positions = await PositionRepository(session).list_open(user.id)
+                for position in positions:
+                    df = storage.read_bars(storage_path, position.ticker, "1d")
+                    if df is None or df.empty:
+                        _logger.debug(
+                            "run_strategies: no stored bars for held position %s — skipping "
+                            "(it stays queued for the next price fetch, see ._watchlist)",
+                            position.ticker,
+                        )
+                        continue
+                    try:
+                        await self._evaluate_sell(user.id, position, df, values, sell)
+                    except Exception as exc:  # noqa: BLE001
+                        _logger.warning("sell strategy eval failed %s/%s: %s", user.id, position.ticker, exc)
 
-    async def _evaluate_ticker(self, user_id, item, df, values, buy, sell) -> None:
-        if sell is not None:
+            if buy is not None:
+                for item in watchlist:
+                    df = storage.read_bars(storage_path, item.ticker, "1d")
+                    if df is None or df.empty:
+                        _logger.debug(
+                            "run_strategies: no stored bars for %s — skipping (backfill it first)",
+                            item.ticker,
+                        )
+                        continue
+                    try:
+                        await self._evaluate_buy(user.id, item, df, values, buy)
+                    except Exception as exc:  # noqa: BLE001
+                        _logger.warning("buy strategy eval failed %s/%s: %s", user.id, item.ticker, exc)
+
+    async def _external_signals(
+        self, user_id: int, ticker: str, sources: list[str]
+    ) -> list[ExternalSignal]:
+        """Fetch third-party ratings (finviz/tradingview/zacks/barchart — see
+        src/modules/signal/sources.py) for the sources a strategy declared via its
+        optional ``EXTERNAL_SOURCES`` module attribute. Returns ``[]`` (never raises)
+        when the strategy didn't ask for any, or when fetching fails outright — a
+        strategy must treat a missing/errored source as "no opinion", not crash."""
+        if not sources:
+            return []
+        try:
             async with self.ctx.db.session() as session:
-                position = await PositionRepository(session).get_open_by_ticker(user_id, item.ticker)
-            if position is not None:
-                sell_decision = await sell.run(
-                    StrategyContext(
-                        ticker=item.ticker,
-                        user_id=user_id,
-                        asset_class=item.asset_class,
-                        config=values,
-                        price_data=df,
-                        position=PositionView(item.ticker, position.quantity, position.avg_price),
-                    )
-                )
-                await self._record_decision(user_id, item, sell.name, "sell", sell_decision)
-                if sell_decision.acted and sell_decision.event is not None:
-                    _logger.debug("run_strategies: %s sell signal for %s", sell.name, item.ticker)
-                    await self.ctx.bus.publish(sell_decision.event)
+                registry = SignalSourceRegistry(self.ctx.credential_manager(session), user_id=user_id)
+                return await registry.fetch(ticker, sources)
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("external signal fetch failed for %s/%s: %s", user_id, ticker, exc)
+            return []
 
-        if buy is not None:
-            buy_decision = await buy.run(
-                StrategyContext(
-                    ticker=item.ticker,
-                    user_id=user_id,
-                    asset_class=item.asset_class,
-                    config=values,
-                    price_data=df,
-                )
+    async def _evaluate_sell(self, user_id: int, position, df, values, sell: LoadedStrategy) -> None:
+        external = await self._external_signals(user_id, position.ticker, sell.external_sources)
+        sell_decision = await sell.run(
+            StrategyContext(
+                ticker=position.ticker,
+                user_id=user_id,
+                asset_class=position.asset_class,
+                config=values,
+                price_data=df,
+                position=PositionView(position.ticker, position.quantity, position.avg_price),
+                external_signals=external,
             )
-            await self._record_decision(user_id, item, buy.name, "buy", buy_decision)
-            if buy_decision.acted and buy_decision.event is not None:
-                _logger.debug("run_strategies: %s buy signal for %s", buy.name, item.ticker)
-                await self.ctx.bus.publish(buy_decision.event)
+        )
+        await self._record_decision(user_id, position, sell.name, "sell", sell_decision)
+        if sell_decision.acted and sell_decision.event is not None:
+            _logger.debug("run_strategies: %s sell signal for %s", sell.name, position.ticker)
+            await self.ctx.bus.publish(sell_decision.event)
+
+    async def _evaluate_buy(self, user_id: int, item, df, values, buy: LoadedStrategy) -> None:
+        external = await self._external_signals(user_id, item.ticker, buy.external_sources)
+        buy_decision = await buy.run(
+            StrategyContext(
+                ticker=item.ticker,
+                user_id=user_id,
+                asset_class=item.asset_class,
+                config=values,
+                price_data=df,
+                external_signals=external,
+            )
+        )
+        await self._record_decision(user_id, item, buy.name, "buy", buy_decision)
+        if buy_decision.acted and buy_decision.event is not None:
+            _logger.debug("run_strategies: %s buy signal for %s", buy.name, item.ticker)
+            await self.ctx.bus.publish(buy_decision.event)
 
     async def _record_decision(
         self, user_id: int, item, strategy_name: str, direction: str, decision: StrategyDecision

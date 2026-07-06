@@ -30,10 +30,12 @@ class PriceWatchlistRepository(BaseRepository[PriceWatchlist]):
 
     async def upsert(self, ticker: str, *, asset_class: str, enabled: bool = True) -> PriceWatchlist:
         """Add a ticker to the watchlist, or update its asset class/enabled flag if
-        it's already there — this is what makes a ticker actually get its price
-        polled (see TradingRuntime._pipeline) and evaluated by strategies (see
-        TradingRuntime.run_strategies); without an entry here, nothing ever happens
-        for that ticker regardless of which strategy is active."""
+        it's already there — this is what makes a ticker a *buy-side* candidate:
+        polled for prices (see TradingRuntime._pipeline, which also covers any ticker
+        with an open position regardless of watchlist membership) and evaluated by
+        active buy strategies (see TradingRuntime.run_strategies). Sell strategies
+        don't need a watchlist entry at all — they run over the user's open positions
+        directly."""
         ticker = ticker.upper()
         existing = await self.get_by_ticker(ticker)
         if existing is not None:

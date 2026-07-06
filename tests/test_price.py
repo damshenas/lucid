@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.modules.db.repositories.price import PriceWatchlistRepository
 from src.modules.price import indicators, regime, storage
 from src.modules.price.pipeline import PricePipeline
+from src.scripts.migrate_legacy_prices import migrate
 
 
 def _uptrend_df(n: int = 300) -> pd.DataFrame:
@@ -120,3 +121,48 @@ async def test_pipeline_run_daily(tmp_path) -> None:
     assert results == {"AAPL": 20, "MSFT": 20}
     assert len(fetched) == 2
     assert storage.read_bars(tmp_path, "AAPL", "1d") is not None
+
+
+def test_migrate_legacy_prices_normalizes_columns_and_case(tmp_path) -> None:
+    legacy_dir = tmp_path / "ohlcv"
+    legacy_dir.mkdir()
+    df = _uptrend_df(5)
+    # Legacy layout: capitalized columns (yfinance-style), ticker filename lowercase.
+    legacy_df = df.rename(columns={c: c.capitalize() for c in df.columns})
+    legacy_df.to_parquet(legacy_dir / "amzn.parquet")
+
+    storage_path = tmp_path / "prices"
+    results = migrate(str(legacy_dir), str(storage_path), "1d")
+
+    assert results == {"AMZN": 5}
+    migrated = storage.read_bars(storage_path, "AMZN", "1d")
+    assert migrated is not None
+    assert list(migrated.columns) == ["open", "high", "low", "close", "volume"]
+    assert len(migrated) == 5
+
+
+def test_migrate_legacy_prices_skips_bad_file_without_raising(tmp_path, capsys) -> None:
+    legacy_dir = tmp_path / "ohlcv"
+    legacy_dir.mkdir()
+    pd.DataFrame({"nonsense": [1, 2, 3]}).to_parquet(legacy_dir / "bad.parquet")
+
+    results = migrate(str(legacy_dir), str(tmp_path / "prices"), "1d")
+
+    assert results == {}
+    assert "skip bad.parquet" in capsys.readouterr().out
+
+
+def test_migrate_legacy_prices_merges_with_existing_new_layout_bars(tmp_path) -> None:
+    legacy_dir = tmp_path / "ohlcv"
+    legacy_dir.mkdir()
+    storage_path = tmp_path / "prices"
+
+    older = _uptrend_df(5)
+    older.to_parquet(legacy_dir / "AMZN.parquet")
+    newer = _uptrend_df(10).iloc[-3:]  # bars already fetched by the current pipeline
+    storage.write_bars(storage_path, "AMZN", "1d", newer)
+
+    migrate(str(legacy_dir), str(storage_path), "1d")
+
+    merged = storage.read_bars(storage_path, "AMZN", "1d")
+    assert len(merged) == 8  # 5 legacy + 3 already-current, deduped by timestamp

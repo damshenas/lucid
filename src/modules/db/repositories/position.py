@@ -28,3 +28,12 @@ class PositionRepository(BaseRepository[Position]):
         )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
+
+    async def list_all_open(self) -> list[Position]:
+        """Every open position across every user — used to (a) evaluate sell
+        strategies against held tickers regardless of the (buy-only) price watchlist,
+        and (b) keep those tickers' price bars fetched even if removed from the
+        watchlist (see TradingRuntime.run_strategies / ._watchlist in src/api/runtime.py)."""
+        stmt = select(Position).where(Position.status == PositionStatus.open.value)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())

@@ -40,6 +40,7 @@ class LoadedStrategy:
     config_schema: dict[str, dict[str, Any]]
     run: RunFn
     module: ModuleType
+    external_sources: list[str]
 
 
 def _require(module: ModuleType, attr: str, path: Path) -> Any:
@@ -78,6 +79,11 @@ def load_strategy_file(path: Path, direction: str, builtin_root: str | Path | No
         config_schema=dict(_require(module, "CONFIG_SCHEMA", path)),
         run=run,
         module=module,
+        # Third-party signal sources (see src/modules/signal/sources.py) this
+        # strategy wants checked before each run() — e.g. EXTERNAL_SOURCES =
+        # ["zacks", "tradingview"]. Optional; omitting it (the common case) means no
+        # external network call is made on this strategy's behalf.
+        external_sources=list(getattr(module, "EXTERNAL_SOURCES", [])),
     )
 
 

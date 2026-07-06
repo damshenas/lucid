@@ -38,7 +38,7 @@ PostgreSQL, Parquet price storage, single hardened Docker container on port 8686
 ## Request → order flow
 
 ```
-scheduler.run_strategies (per trader, per watchlist ticker)
+scheduler.run_strategies (sell: per trader's open positions · buy: per watchlist ticker)
   → active buy/sell strategy .run(StrategyContext)
     → BuySignalEvent / SellSignalEvent published on the bus
       → ExecutionEngine.handle_buy/handle_sell
