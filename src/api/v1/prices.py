@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
@@ -19,6 +19,8 @@ from ..deps import get_context, get_current_user, get_session, require_permissio
 
 router = APIRouter(prefix="/api/v1/prices", tags=["prices"])
 
+PollInterval = Literal["1m", "1h"]
+
 
 class BackfillIn(BaseModel):
     ticker: str
@@ -28,10 +30,12 @@ class BackfillIn(BaseModel):
 class WatchlistIn(BaseModel):
     ticker: str
     asset_class: str = "equity"
+    poll_interval: PollInterval = "1h"
 
 
 class WatchlistPatch(BaseModel):
-    enabled: bool
+    enabled: bool | None = None
+    poll_interval: PollInterval | None = None
 
 
 # Registered before the "/{ticker}" catch-all below so "/watchlist" doesn't get
@@ -49,6 +53,7 @@ async def list_watchlist(
             "ticker": row.ticker,
             "asset_class": row.asset_class,
             "enabled": row.enabled,
+            "poll_interval": row.poll_interval,
             "has_bars": storage.read_bars(storage_path, row.ticker, "1d") is not None,
         }
         for row in rows
@@ -60,7 +65,15 @@ async def list_watchlist(
     known = {r["ticker"] for r in result}
     for ticker in storage.list_tickers(storage_path, "1d"):
         if ticker not in known:
-            result.append({"ticker": ticker, "asset_class": "equity", "enabled": False, "has_bars": True})
+            result.append(
+                {
+                    "ticker": ticker,
+                    "asset_class": "equity",
+                    "enabled": False,
+                    "poll_interval": "1h",
+                    "has_bars": True,
+                }
+            )
     return sorted(result, key=lambda r: r["ticker"])
 
 
@@ -70,23 +83,46 @@ async def add_to_watchlist(
     session: AsyncSession = Depends(get_session),
     user: User = Depends(require_permission(Permission.edit_own_strategies)),
 ) -> dict[str, Any]:
-    row = await PriceWatchlistRepository(session).upsert(body.ticker, asset_class=body.asset_class)
+    row = await PriceWatchlistRepository(session).upsert(
+        body.ticker, asset_class=body.asset_class, poll_interval=body.poll_interval
+    )
     await session.commit()
-    return {"ticker": row.ticker, "asset_class": row.asset_class, "enabled": row.enabled}
+    return {
+        "ticker": row.ticker,
+        "asset_class": row.asset_class,
+        "enabled": row.enabled,
+        "poll_interval": row.poll_interval,
+    }
 
 
 @router.patch("/watchlist/{ticker}")
-async def set_watchlist_enabled(
+async def update_watchlist_item(
     ticker: str,
     body: WatchlistPatch,
     session: AsyncSession = Depends(get_session),
     user: User = Depends(require_permission(Permission.edit_own_strategies)),
 ) -> dict[str, Any]:
-    row = await PriceWatchlistRepository(session).set_enabled(ticker, body.enabled)
+    repo = PriceWatchlistRepository(session)
+    row = None
+    if body.enabled is not None:
+        row = await repo.set_enabled(ticker, body.enabled)
+        if row is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"'{ticker}' is not on the watchlist")
+    if body.poll_interval is not None:
+        row = await repo.set_poll_interval(ticker, body.poll_interval)
+        if row is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"'{ticker}' is not on the watchlist")
     if row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, f"'{ticker}' is not on the watchlist")
+        row = await repo.get_by_ticker(ticker.upper())
+        if row is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"'{ticker}' is not on the watchlist")
     await session.commit()
-    return {"ticker": row.ticker, "asset_class": row.asset_class, "enabled": row.enabled}
+    return {
+        "ticker": row.ticker,
+        "asset_class": row.asset_class,
+        "enabled": row.enabled,
+        "poll_interval": row.poll_interval,
+    }
 
 
 @router.delete("/watchlist/{ticker}", status_code=status.HTTP_204_NO_CONTENT)

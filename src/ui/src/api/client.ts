@@ -120,15 +120,18 @@ export const api = {
       body: JSON.stringify({ ticker, days }),
     }),
   watchlist: () => request<WatchlistItem[]>("/api/v1/prices/watchlist"),
-  addToWatchlist: (ticker: string, assetClass: string) =>
+  addToWatchlist: (ticker: string, assetClass: string, pollInterval: "1m" | "1h" = "1h") =>
     request<WatchlistItem>("/api/v1/prices/watchlist", {
       method: "POST",
-      body: JSON.stringify({ ticker, asset_class: assetClass }),
+      body: JSON.stringify({ ticker, asset_class: assetClass, poll_interval: pollInterval }),
     }),
-  setWatchlistEnabled: (ticker: string, enabled: boolean) =>
+  updateWatchlistItem: (
+    ticker: string,
+    changes: { enabled?: boolean; poll_interval?: "1m" | "1h" },
+  ) =>
     request<WatchlistItem>(`/api/v1/prices/watchlist/${encodeURIComponent(ticker)}`, {
       method: "PATCH",
-      body: JSON.stringify({ enabled }),
+      body: JSON.stringify(changes),
     }),
   removeFromWatchlist: (ticker: string) =>
     request<void>(`/api/v1/prices/watchlist/${encodeURIComponent(ticker)}`, {

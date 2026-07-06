@@ -1,23 +1,17 @@
 import { useEffect, useState } from "react";
-import { Inbox, Plus, RefreshCw, Search, Trash2 } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Inbox, RefreshCw, Search, Settings as SettingsIcon } from "lucide-react";
 import { api } from "../api/client";
-import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 import { Select } from "../components/ui/Select";
 import { Sparkline } from "../components/ui/Sparkline";
-import { Toggle } from "../components/ui/Toggle";
-import { useAuth } from "../hooks/useAuth";
-import { ASSET_CLASSES } from "../lib/assetClasses";
-import { hasPermission } from "../lib/permissions";
 import type { PriceBars, WatchlistItem } from "../types";
 
 const INTERVALS = ["1d", "15m"];
 const TICKER_DATALIST_ID = "known-tickers";
 
 export function Prices() {
-  const { role } = useAuth();
-  const canManageWatchlist = hasPermission(role, "edit_own_strategies");
   const [ticker, setTicker] = useState("");
   const [interval, setInterval_] = useState("1d");
   const [data, setData] = useState<PriceBars | null>(null);
@@ -27,18 +21,13 @@ export function Prices() {
   const [backfillStatus, setBackfillStatus] = useState<string | null>(null);
   const [backfilling, setBackfilling] = useState(false);
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
-  const [newTicker, setNewTicker] = useState("");
-  const [newAssetClass, setNewAssetClass] = useState(ASSET_CLASSES[0]);
-  const [watchlistBusy, setWatchlistBusy] = useState<string | null>(null);
 
-  function refreshWatchlist() {
+  useEffect(() => {
     api
       .watchlist()
       .then(setWatchlist)
       .catch((e) => setError((e as Error).message));
-  }
-
-  useEffect(refreshWatchlist, []);
+  }, []);
 
   async function fetchBars() {
     if (!ticker.trim()) return;
@@ -63,57 +52,10 @@ export function Prices() {
       const result = await api.backfillPrices(ticker.trim().toUpperCase(), backfillDays);
       setBackfillStatus(`Backfilled ${result.rows} rows.`);
       await fetchBars();
-      refreshWatchlist();
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setBackfilling(false);
-    }
-  }
-
-  async function addTicker(e: React.FormEvent) {
-    e.preventDefault();
-    const t = newTicker.trim().toUpperCase();
-    if (!t) return;
-    setWatchlistBusy(t);
-    setError(null);
-    try {
-      await api.addToWatchlist(t, newAssetClass);
-      // Fetch bars right away so the strategy scheduler doesn't have to wait for the
-      // next daily/intraday price job before this ticker can produce a signal.
-      await api.backfillPrices(t, backfillDays).catch(() => {});
-      setNewTicker("");
-      refreshWatchlist();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setWatchlistBusy(null);
-    }
-  }
-
-  async function toggleWatchlist(item: WatchlistItem) {
-    setWatchlistBusy(item.ticker);
-    setError(null);
-    try {
-      await api.setWatchlistEnabled(item.ticker, !item.enabled);
-      refreshWatchlist();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setWatchlistBusy(null);
-    }
-  }
-
-  async function removeTicker(item: WatchlistItem) {
-    setWatchlistBusy(item.ticker);
-    setError(null);
-    try {
-      await api.removeFromWatchlist(item.ticker);
-      refreshWatchlist();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setWatchlistBusy(null);
     }
   }
 
@@ -173,89 +115,25 @@ export function Prices() {
       </Card>
 
       {/* Known tickers (watchlist + anything already backfilled) power the
-          autocomplete above via the browser's native datalist. */}
+          autocomplete above via the browser's native datalist. Watchlist
+          management itself now lives in Settings > Price > Watchlist. */}
       <datalist id={TICKER_DATALIST_ID}>
         {watchlist.map((w) => (
           <option key={w.ticker} value={w.ticker} />
         ))}
       </datalist>
 
-      <Card className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="text-sm font-semibold uppercase tracking-wide text-white/40">Watchlist</h3>
-          <span className="text-xs text-white/40">
-            Only enabled tickers here are evaluated by active strategies and kept priced.
-          </span>
-        </div>
-
-        {canManageWatchlist && (
-          <form onSubmit={addTicker} className="flex flex-wrap items-end gap-2">
-            <label className="block">
-              <span className="mb-1 block text-xs text-white/40">Add ticker</span>
-              <input
-                value={newTicker}
-                onChange={(e) => setNewTicker(e.target.value)}
-                placeholder="AMZN"
-                list={TICKER_DATALIST_ID}
-                className="w-28 rounded-xl border border-white/10 bg-white/5 px-3.5 py-2 text-sm uppercase text-white outline-none transition-colors focus:border-violet/50 focus:glow-violet"
-              />
-            </label>
-            <Select
-              value={newAssetClass}
-              onChange={(e) => setNewAssetClass(e.target.value)}
-              className="w-32"
-            >
-              {ASSET_CLASSES.map((ac) => (
-                <option key={ac} value={ac} className="bg-surface">
-                  {ac}
-                </option>
-              ))}
-            </Select>
-            <Button type="submit" variant="secondary" disabled={!newTicker.trim() || watchlistBusy !== null}>
-              <Plus size={16} />
-              Add
-            </Button>
-          </form>
-        )}
-
-        {watchlist.length === 0 ? (
-          <p className="py-6 text-center text-sm text-white/40">
-            No tickers yet — add one above to start pricing and evaluating it.
-          </p>
-        ) : (
-          <div className="space-y-2">
-            {watchlist.map((w) => (
-              <div
-                key={w.ticker}
-                className="flex items-center justify-between gap-3 rounded-xl border border-white/5 bg-white/5 px-3 py-2"
-              >
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium">{w.ticker}</span>
-                  <Badge tone="neutral">{w.asset_class}</Badge>
-                  {!w.has_bars && <Badge tone="rose">no bars yet</Badge>}
-                </div>
-                {canManageWatchlist && (
-                  <div className="flex items-center gap-3">
-                    <Toggle
-                      checked={w.enabled}
-                      onChange={() => toggleWatchlist(w)}
-                      disabled={watchlistBusy === w.ticker}
-                      label={`${w.enabled ? "Disable" : "Enable"} ${w.ticker}`}
-                    />
-                    <button
-                      onClick={() => removeTicker(w)}
-                      disabled={watchlistBusy === w.ticker}
-                      aria-label={`Remove ${w.ticker}`}
-                      className="text-white/40 transition-colors hover:text-rose disabled:opacity-50"
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
+      <Card className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-white/50">
+          Manage which tickers are priced and evaluated by active strategies from the
+          Watchlist.
+        </p>
+        <Link to="/settings">
+          <Button variant="secondary">
+            <SettingsIcon size={16} />
+            Open Settings
+          </Button>
+        </Link>
       </Card>
 
       {error && (

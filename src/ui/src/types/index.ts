@@ -80,6 +80,10 @@ export interface WatchlistItem {
   ticker: string;
   asset_class: string;
   enabled: boolean;
+  /** Intraday polling granularity for this ticker (Settings > Price > Watchlist) —
+   * "1m" (green chip) or "1h" (blue chip, the default). Independent of the always-on
+   * daily fetch every watchlist ticker gets regardless of this value. */
+  poll_interval: "1m" | "1h";
   has_bars: boolean;
 }
 

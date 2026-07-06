@@ -28,28 +28,46 @@ class PriceWatchlistRepository(BaseRepository[PriceWatchlist]):
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
-    async def upsert(self, ticker: str, *, asset_class: str, enabled: bool = True) -> PriceWatchlist:
-        """Add a ticker to the watchlist, or update its asset class/enabled flag if
-        it's already there — this is what makes a ticker a *buy-side* candidate:
-        polled for prices (see TradingRuntime._pipeline, which also covers any ticker
-        with an open position regardless of watchlist membership) and evaluated by
-        active buy strategies (see TradingRuntime.run_strategies). Sell strategies
-        don't need a watchlist entry at all — they run over the user's open positions
-        directly."""
+    async def upsert(
+        self,
+        ticker: str,
+        *,
+        asset_class: str,
+        enabled: bool = True,
+        poll_interval: str = "1h",
+    ) -> PriceWatchlist:
+        """Add a ticker to the watchlist, or update its asset class/enabled
+        flag/poll interval if it's already there — this is what makes a ticker a
+        *buy-side* candidate: polled for prices (see TradingRuntime._pipeline, which
+        also covers any ticker with an open position regardless of watchlist
+        membership) and evaluated by active buy strategies (see
+        TradingRuntime.run_strategies). Sell strategies don't need a watchlist entry
+        at all — they run over the user's open positions directly."""
         ticker = ticker.upper()
         existing = await self.get_by_ticker(ticker)
         if existing is not None:
             existing.asset_class = asset_class
             existing.enabled = enabled
+            existing.poll_interval = poll_interval
             await self.session.flush()
             return existing
-        return await self.create(ticker=ticker, asset_class=asset_class, enabled=enabled)
+        return await self.create(
+            ticker=ticker, asset_class=asset_class, enabled=enabled, poll_interval=poll_interval
+        )
 
     async def set_enabled(self, ticker: str, enabled: bool) -> PriceWatchlist | None:
         row = await self.get_by_ticker(ticker.upper())
         if row is None:
             return None
         row.enabled = enabled
+        await self.session.flush()
+        return row
+
+    async def set_poll_interval(self, ticker: str, poll_interval: str) -> PriceWatchlist | None:
+        row = await self.get_by_ticker(ticker.upper())
+        if row is None:
+            return None
+        row.poll_interval = poll_interval
         await self.session.flush()
         return row
 

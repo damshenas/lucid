@@ -291,16 +291,41 @@ def test_price_watchlist_crud(client: TestClient) -> None:
         json={"ticker": "amzn", "asset_class": "equity"},
     )
     assert add.status_code == 201
-    assert add.json() == {"ticker": "AMZN", "asset_class": "equity", "enabled": True}
+    assert add.json() == {
+        "ticker": "AMZN",
+        "asset_class": "equity",
+        "enabled": True,
+        "poll_interval": "1h",  # default when not specified
+    }
 
     listing = client.get("/api/v1/prices/watchlist", headers=_auth(trader_token)).json()
-    assert listing == [{"ticker": "AMZN", "asset_class": "equity", "enabled": True, "has_bars": False}]
+    assert listing == [
+        {
+            "ticker": "AMZN",
+            "asset_class": "equity",
+            "enabled": True,
+            "poll_interval": "1h",
+            "has_bars": False,
+        }
+    ]
+
+    set_minute = client.patch(
+        "/api/v1/prices/watchlist/AMZN", headers=_auth(trader_token), json={"poll_interval": "1m"}
+    )
+    assert set_minute.status_code == 200
+    assert set_minute.json()["poll_interval"] == "1m"
+
+    bad_interval = client.patch(
+        "/api/v1/prices/watchlist/AMZN", headers=_auth(trader_token), json={"poll_interval": "15m"}
+    )
+    assert bad_interval.status_code == 422
 
     disable = client.patch(
         "/api/v1/prices/watchlist/AMZN", headers=_auth(trader_token), json={"enabled": False}
     )
     assert disable.status_code == 200
     assert disable.json()["enabled"] is False
+    assert disable.json()["poll_interval"] == "1m"  # untouched by an enabled-only patch
 
     missing = client.patch(
         "/api/v1/prices/watchlist/NOPE", headers=_auth(trader_token), json={"enabled": True}

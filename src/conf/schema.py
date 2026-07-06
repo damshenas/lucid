@@ -60,7 +60,8 @@ class ScheduleConfig(BaseModel):
 class PriceConfig(BaseModel):
     storage_path: str = "/data/prices"
     backfill_days: int = 365
-    intraday_interval: str = "15m"
+    # Intraday bar granularity is set per-ticker on the watchlist itself ("1m" or
+    # "1h", default "1h" — see PriceWatchlist.poll_interval), not here.
     benchmark_ticker: str = "SPY"
 
 

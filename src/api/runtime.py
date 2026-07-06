@@ -72,6 +72,15 @@ class TradingRuntime:
             position_tickers = {r.ticker for r in await PositionRepository(session).list_all_open()}
         return sorted(watchlist_tickers | position_tickers)
 
+    async def _watchlist_by_poll_interval(self, poll_interval: str) -> list[str]:
+        """Enabled watchlist tickers set (Settings > Price > Watchlist) to this
+        intraday granularity — "1m" (green chip) or "1h" (blue chip, the default).
+        Independent of the always-on daily ("1d") fetch every watchlist ticker gets
+        via ._watchlist() above regardless of this per-ticker choice."""
+        async with self.ctx.db.session() as session:
+            rows = await PriceWatchlistRepository(session).list_enabled()
+        return [r.ticker for r in rows if r.poll_interval == poll_interval]
+
     async def _mark_fetched(self, ticker: str, interval: str, _rows: int) -> None:
         async with self.ctx.db.transaction() as session:
             await PriceFetchLogRepository(session).mark_fetched(ticker, interval)
@@ -81,6 +90,19 @@ class TradingRuntime:
             storage_path=self.ctx.settings.price.storage_path,
             fetcher=yahoofinance.fetch_ohlcv,
             watchlist_provider=self._watchlist,
+            bus=self.ctx.bus,
+            on_fetched=self._mark_fetched,
+        )
+
+    def _intraday_pipeline(self, poll_interval: str) -> PricePipeline:
+        """A pipeline scoped to one intraday granularity ('1m'/'1h') — its
+        watchlist_provider only ever returns tickers configured for that granularity
+        (see ._watchlist_by_poll_interval), unlike ._pipeline() above (daily bars,
+        every watchlist ticker + open positions, regardless of poll_interval)."""
+        return PricePipeline(
+            storage_path=self.ctx.settings.price.storage_path,
+            fetcher=yahoofinance.fetch_ohlcv,
+            watchlist_provider=lambda: self._watchlist_by_poll_interval(poll_interval),
             bus=self.ctx.bus,
             on_fetched=self._mark_fetched,
         )
@@ -274,13 +296,25 @@ class TradingRuntime:
 
     def register_jobs(self) -> None:
         schedule = self.ctx.settings.schedule
-        pipeline = self._pipeline()
-        interval = self.ctx.settings.price.intraday_interval
+        daily_pipeline = self._pipeline()
+        minute_pipeline = self._intraday_pipeline("1m")
+        hourly_pipeline = self._intraday_pipeline("1h")
 
-        self.scheduler.add_cron_job(pipeline.run_daily, id="price_daily", hour=schedule.daily_price_hour)
+        self.scheduler.add_cron_job(
+            daily_pipeline.run_daily, id="price_daily", hour=schedule.daily_price_hour
+        )
+        # Two separate jobs (rather than one shared "intraday" job) since each ticker
+        # on the watchlist declares its own granularity (Settings > Price >
+        # Watchlist) — a ticker only ever gets fetched by the job matching its
+        # current choice, never both.
         self.scheduler.add_interval_job(
-            lambda: pipeline.run_intraday(interval=interval),
-            id="price_intraday",
+            lambda: minute_pipeline.run_intraday(interval="1m", period="5d"),
+            id="price_intraday_1m",
+            minutes=max(1, schedule.intraday_price_minutes),
+        )
+        self.scheduler.add_interval_job(
+            lambda: hourly_pipeline.run_intraday(interval="1h", period="5d"),
+            id="price_intraday_1h",
             minutes=max(1, schedule.intraday_price_minutes),
         )
         self.scheduler.add_interval_job(

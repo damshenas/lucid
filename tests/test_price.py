@@ -79,17 +79,24 @@ async def test_price_watchlist_repository_crud(session: AsyncSession) -> None:
     row = await repo.upsert("amzn", asset_class="equity")
     assert row.ticker == "AMZN"  # normalized to upper case
     assert row.enabled is True
+    assert row.poll_interval == "1h"  # default
     assert [r.ticker for r in await repo.list_enabled()] == ["AMZN"]
 
     # upsert again updates the existing row rather than creating a duplicate
-    updated = await repo.upsert("amzn", asset_class="crypto", enabled=False)
+    updated = await repo.upsert("amzn", asset_class="crypto", enabled=False, poll_interval="1m")
     assert updated.id == row.id
     assert updated.asset_class == "crypto"
+    assert updated.poll_interval == "1m"
     assert await repo.list_enabled() == []
 
     toggled = await repo.set_enabled("AMZN", True)
     assert toggled is not None
     assert toggled.enabled is True
+
+    interval_updated = await repo.set_poll_interval("AMZN", "1h")
+    assert interval_updated is not None
+    assert interval_updated.poll_interval == "1h"
+    assert await repo.set_poll_interval("NOPE", "1h") is None
     assert await repo.set_enabled("NOPE", True) is None
 
     assert await repo.delete_by_ticker("AMZN") is True

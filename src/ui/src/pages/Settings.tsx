@@ -12,6 +12,7 @@ import { SchemaGroup } from "./settings/SchemaGroup";
 import { BROKER_PLATFORMS, SETTINGS_SECTION_ORDER, buildSchemaTree, emptyGroup, humanize } from "./settings/schemaTree";
 import { SecurityTab } from "./settings/SecurityTab";
 import { StrategyTab } from "./settings/StrategyTab";
+import { WatchlistTab } from "./settings/WatchlistTab";
 
 interface Status {
   text: string;
@@ -153,6 +154,21 @@ export function Settings() {
   const tabs: TabDef[] = SETTINGS_SECTION_ORDER.map((name) => {
     if (name === "broker") {
       return { id: "broker", label: "Broker", content: <Tabs level="nested" tabs={brokerTabs} /> };
+    }
+    if (name === "price") {
+      return {
+        id: "price",
+        label: "Price",
+        content: (
+          <Tabs
+            level="nested"
+            tabs={[
+              { id: "watchlist", label: "Watchlist", content: <WatchlistTab canManage={canStrategy} /> },
+              { id: "settings", label: "Settings", content: schemaTab("price") },
+            ]}
+          />
+        ),
+      };
     }
     if (name === "strategy") {
       return {
