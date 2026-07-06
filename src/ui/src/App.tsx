@@ -16,12 +16,12 @@ import { StrategyDetail } from "./pages/StrategyDetail";
 import { Users } from "./pages/Users";
 
 export function App() {
-  const { token, role, initialized, login, setup, logout } = useAuth();
+  const { token, role, initialized, sessionExpired, login, setup, logout } = useAuth();
 
   if (!token) {
     return (
       <ServerStatusGate>
-        <Login initialized={initialized} onLogin={login} onSetup={setup} />
+        <Login initialized={initialized} sessionExpired={sessionExpired} onLogin={login} onSetup={setup} />
       </ServerStatusGate>
     );
   }

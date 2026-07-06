@@ -36,10 +36,12 @@ async def test_trend_follow_buys_in_uptrend() -> None:
         config={"strategy": {"trend_follow": {"rsi_max": 101.0}}},
         price_data=_df(np.linspace(100.0, 200.0, 260)),
     )
-    signal = await strat.run(ctx)
-    assert signal is not None
-    assert signal.ticker == "AAPL"
-    assert signal.source == "trend_follow"
+    decision = await strat.run(ctx)
+    assert decision.acted
+    assert decision.reasoning
+    assert decision.event is not None
+    assert decision.event.ticker == "AAPL"
+    assert decision.event.source == "trend_follow"
 
 
 async def test_trend_follow_skips_downtrend() -> None:
@@ -48,7 +50,10 @@ async def test_trend_follow_skips_downtrend() -> None:
         ticker="AAPL", user_id=1, asset_class="equity",
         price_data=_df(np.linspace(200.0, 100.0, 260)),
     )
-    assert await strat.run(ctx) is None
+    decision = await strat.run(ctx)
+    assert not decision.acted
+    assert decision.event is None
+    assert "uptrend" in decision.reasoning
 
 
 async def test_trailing_stop_full_exit_on_stop() -> None:
@@ -59,9 +64,10 @@ async def test_trailing_stop_full_exit_on_stop() -> None:
         price_data=_df(values),
         position=PositionView(ticker="AAPL", quantity=10, avg_price=200.0),
     )
-    signal = await strat.run(ctx)
-    assert signal is not None
-    assert signal.quantity_pct is None  # full exit
+    decision = await strat.run(ctx)
+    assert decision.acted
+    assert decision.event is not None
+    assert decision.event.quantity_pct is None  # full exit
 
 
 async def test_trailing_stop_profit_take_partial() -> None:
@@ -72,6 +78,7 @@ async def test_trailing_stop_profit_take_partial() -> None:
         price_data=_df(values),
         position=PositionView(ticker="AAPL", quantity=10, avg_price=100.0),
     )
-    signal = await strat.run(ctx)
-    assert signal is not None
-    assert signal.quantity_pct == 50.0  # partial profit take
+    decision = await strat.run(ctx)
+    assert decision.acted
+    assert decision.event is not None
+    assert decision.event.quantity_pct == 50.0  # partial profit take

@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.modules.db.models.base import Role
+from src.modules.db.repositories.decision import StrategyDecisionRepository
 from src.modules.db.repositories.price import PriceFetchLogRepository, PriceWatchlistRepository
 from src.modules.db.repositories.position import PositionRepository
 from src.modules.db.repositories.user import UserRepository
@@ -20,7 +21,7 @@ from src.modules.logger import get_logger
 from src.modules.price import storage
 from src.modules.price.pipeline import PricePipeline
 from src.modules.schedules import Scheduler
-from src.modules.strategy.context import PositionView, StrategyContext
+from src.modules.strategy.context import PositionView, StrategyContext, StrategyDecision
 
 from .context import AppContext
 
@@ -136,7 +137,7 @@ class TradingRuntime:
             async with self.ctx.db.session() as session:
                 position = await PositionRepository(session).get_open_by_ticker(user_id, item.ticker)
             if position is not None:
-                sell_signal = await sell.run(
+                sell_decision = await sell.run(
                     StrategyContext(
                         ticker=item.ticker,
                         user_id=user_id,
@@ -146,12 +147,13 @@ class TradingRuntime:
                         position=PositionView(item.ticker, position.quantity, position.avg_price),
                     )
                 )
-                if sell_signal is not None:
+                await self._record_decision(user_id, item, sell.name, "sell", sell_decision)
+                if sell_decision.acted and sell_decision.event is not None:
                     _logger.debug("run_strategies: %s sell signal for %s", sell.name, item.ticker)
-                    await self.ctx.bus.publish(sell_signal)
+                    await self.ctx.bus.publish(sell_decision.event)
 
         if buy is not None:
-            buy_signal = await buy.run(
+            buy_decision = await buy.run(
                 StrategyContext(
                     ticker=item.ticker,
                     user_id=user_id,
@@ -160,9 +162,36 @@ class TradingRuntime:
                     price_data=df,
                 )
             )
-            if buy_signal is not None:
+            await self._record_decision(user_id, item, buy.name, "buy", buy_decision)
+            if buy_decision.acted and buy_decision.event is not None:
                 _logger.debug("run_strategies: %s buy signal for %s", buy.name, item.ticker)
-                await self.ctx.bus.publish(buy_signal)
+                await self.ctx.bus.publish(buy_decision.event)
+
+    async def _record_decision(
+        self, user_id: int, item, strategy_name: str, direction: str, decision: StrategyDecision
+    ) -> None:
+        """Log a strategy's evaluation outcome — but only when it actually changed
+        from the last one recorded for this (user, ticker, strategy), so a strategy
+        that keeps deciding the same thing every poll doesn't spam the decision log
+        (see pages/StrategyDetail.tsx) with thousands of identical rows."""
+        async with self.ctx.db.transaction() as session:
+            repo = StrategyDecisionRepository(session)
+            latest = await repo.latest_for(user_id, item.ticker, strategy_name)
+            if (
+                latest is not None
+                and latest.acted == decision.acted
+                and latest.reasoning == decision.reasoning
+            ):
+                return
+            await repo.create(
+                user_id=user_id,
+                ticker=item.ticker,
+                asset_class=item.asset_class,
+                strategy_name=strategy_name,
+                direction=direction,
+                acted=decision.acted,
+                reasoning=decision.reasoning,
+            )
 
     async def _scan_strategies(self) -> None:
         async with self.ctx.db.transaction() as session:

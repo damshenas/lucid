@@ -15,6 +15,7 @@ from .base import (
 )
 from .config import UserConfig
 from .credential import Credential
+from .decision import StrategyDecisionLog
 from .log import AppLog
 from .order import Order
 from .position import Position
@@ -40,6 +41,7 @@ __all__ = [
     "Signal",
     "SignalOutcome",
     "SignalStatus",
+    "StrategyDecisionLog",
     "StrategyRegistry",
     "TimestampMixin",
     "User",

@@ -1,4 +1,4 @@
-"""Strategy routes: list, scan, and per-user activation."""
+"""Strategy routes: list, scan, per-user activation, and the decision log."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.modules.authorization import Permission
 from src.modules.db.models.user import User
+from src.modules.db.repositories.decision import StrategyDecisionRepository
 
 from ..deps import get_context, get_current_user, get_session, require_permission
 
@@ -67,3 +68,29 @@ async def activate_strategy(
     )
     await session.commit()
     return {"active": name, "direction": direction}
+
+
+@router.get("/{name}/decisions")
+async def list_decisions(
+    name: str,
+    limit: int = Query(default=50, le=200),
+    offset: int = 0,
+    session: AsyncSession = Depends(get_session),
+    user: User = Depends(get_current_user),
+) -> list[dict[str, Any]]:
+    """Every recorded change in this strategy's evaluation outcome for the current
+    user — why it acted (bought/sold) or didn't, per ticker (see
+    src/modules/db/models/decision.py, src/api/runtime.py, pages/StrategyDetail.tsx)."""
+    rows = await StrategyDecisionRepository(session).list_by_strategy(
+        user.id, name, limit=limit, offset=offset
+    )
+    return [
+        {
+            "ticker": r.ticker,
+            "direction": r.direction,
+            "acted": r.acted,
+            "reasoning": r.reasoning,
+            "created_at": r.created_at.isoformat(),
+        }
+        for r in rows
+    ]

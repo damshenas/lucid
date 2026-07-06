@@ -5,6 +5,7 @@ from __future__ import annotations
 from .base import BaseRepository
 from .config import ConfigRepository
 from .credential import CredentialRepository
+from .decision import StrategyDecisionRepository
 from .order import OrderRepository
 from .position import PositionRepository
 from .price import PriceFetchLogRepository, PriceWatchlistRepository
@@ -22,6 +23,7 @@ __all__ = [
     "PriceWatchlistRepository",
     "SignalOutcomeRepository",
     "SignalRepository",
+    "StrategyDecisionRepository",
     "StrategyRepository",
     "UserRepository",
 ]

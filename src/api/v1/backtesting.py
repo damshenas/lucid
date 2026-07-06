@@ -58,7 +58,7 @@ async def run(
     signals = 0
     for i in range(_MIN_BARS, len(df), _STEP):
         window = df.iloc[:i]
-        result = await strategy.run(
+        decision = await strategy.run(
             StrategyContext(
                 ticker=body.ticker,
                 user_id=user.id,
@@ -67,7 +67,7 @@ async def run(
                 price_data=window,
             )
         )
-        if result is not None:
+        if decision.acted:
             signals += 1
 
     return {"ticker": body.ticker.upper(), "strategy": strategy.name, "buy_signals": signals}

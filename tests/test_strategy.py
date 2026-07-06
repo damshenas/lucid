@@ -148,3 +148,38 @@ async def test_all_extra_sections_includes_every_strategy_regardless_of_active(
     assert "rsi_max" in extra["strategy.trend_follow"]
     assert "strategy.trailing_stop" in extra
     assert "atr_multiplier" in extra["strategy.trailing_stop"]
+
+
+async def test_decision_repository_dedup_via_latest_for(session: AsyncSession) -> None:
+    from src.modules.db.repositories.decision import StrategyDecisionRepository
+
+    repo = StrategyDecisionRepository(session)
+    assert await repo.latest_for(1, "AAPL", "trend_follow") is None
+
+    first = await repo.create(
+        user_id=1,
+        ticker="AAPL",
+        asset_class="equity",
+        strategy_name="trend_follow",
+        direction="buy",
+        acted=False,
+        reasoning="no uptrend",
+    )
+    latest = await repo.latest_for(1, "AAPL", "trend_follow")
+    assert latest is not None and latest.id == first.id
+
+    second = await repo.create(
+        user_id=1,
+        ticker="AAPL",
+        asset_class="equity",
+        strategy_name="trend_follow",
+        direction="buy",
+        acted=True,
+        reasoning="uptrend confirmed",
+    )
+    rows = await repo.list_by_strategy(1, "trend_follow")
+    assert [r.id for r in rows] == [second.id, first.id]  # newest first
+
+    # a different ticker/strategy has its own independent "latest"
+    assert await repo.latest_for(1, "MSFT", "trend_follow") is None
+    assert await repo.latest_for(2, "AAPL", "trend_follow") is None

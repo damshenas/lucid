@@ -76,6 +76,17 @@ def test_settings_schema_and_strategies(client: TestClient) -> None:
     assert client.get("/api/v1/positions", headers=_auth(token)).json() == []
 
 
+def test_strategy_decisions_endpoint(client: TestClient) -> None:
+    token = client.post(
+        "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
+    ).json()["access_token"]
+
+    # No decisions recorded yet (nothing has evaluated it) -> empty, not an error.
+    resp = client.get("/api/v1/strategies/trend_follow/decisions", headers=_auth(token))
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
 def test_save_secret_rejected(client: TestClient) -> None:
     token = client.post(
         "/api/v1/auth/setup", json={"username": "root", "password": "password123"}

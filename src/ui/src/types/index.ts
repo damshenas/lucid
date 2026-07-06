@@ -53,6 +53,14 @@ export interface Signal {
   status: string;
 }
 
+export interface Decision {
+  ticker: string;
+  direction: string;
+  acted: boolean;
+  reasoning: string;
+  created_at: string;
+}
+
 export interface PriceBar {
   date: string;
   open: number;

@@ -1,8 +1,8 @@
 """Discover and load single-file strategies from ``strategies/buy`` and ``strategies/sell``.
 
 Each strategy file must export ``STRATEGY_NAME``, ``STRATEGY_VERSION``, ``CONFIG_SCHEMA``
-and an ``async def run(context)``. Optional: ``STRATEGY_DESCRIPTION``, ``FEATURES`` (a
-list of UI feature tags the strategy uses, e.g. ``["signals"]`` — see
+and an ``async def run(context) -> StrategyDecision``. Optional: ``STRATEGY_DESCRIPTION``,
+``FEATURES`` (a list of UI feature tags the strategy uses, e.g. ``["signals"]`` — see
 pages/StrategyDetail.tsx for how these drive the per-strategy sidebar page).
 """
 
@@ -17,9 +17,9 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-from .context import StrategyContext
+from .context import StrategyContext, StrategyDecision
 
-RunFn = Callable[[StrategyContext], Awaitable[Any]]
+RunFn = Callable[[StrategyContext], Awaitable[StrategyDecision]]
 
 _DIRECTIONS = ("buy", "sell")
 

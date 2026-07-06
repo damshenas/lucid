@@ -4,11 +4,12 @@ import { Button } from "../components/ui/Button";
 
 interface Props {
   initialized: boolean | null;
+  sessionExpired: boolean;
   onLogin: (u: string, p: string) => Promise<void>;
   onSetup: (u: string, p: string) => Promise<void>;
 }
 
-export function Login({ initialized, onLogin, onSetup }: Props) {
+export function Login({ initialized, sessionExpired, onLogin, onSetup }: Props) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -56,6 +57,12 @@ export function Login({ initialized, onLogin, onSetup }: Props) {
         <p className="mb-6 text-sm text-white/50">
           {isSetup ? "Create the first admin account" : "Sign in to continue"}
         </p>
+
+        {sessionExpired && (
+          <p className="mb-4 rounded-xl border border-cyan/30 bg-cyan/10 px-3 py-2 text-sm text-cyan">
+            Your session expired. Please sign in again.
+          </p>
+        )}
 
         <form onSubmit={submit} autoComplete="on" className="space-y-3">
           <label className="block">

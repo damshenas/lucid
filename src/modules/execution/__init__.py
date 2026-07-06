@@ -25,10 +25,12 @@ from src.modules.bus import (
     SellSignalEvent,
 )
 from src.modules.db.connection import Database
-from src.modules.db.models.base import OrderSide, OrderStatus, PositionStatus
+from src.modules.db.models.base import OrderSide, OrderStatus, PositionStatus, SignalStatus
 from src.modules.db.repositories.order import OrderRepository
 from src.modules.db.repositories.position import PositionRepository
+from src.modules.db.repositories.signal import SignalRepository
 from src.modules.logger import get_logger
+from src.modules.signal import SignalService
 
 
 from .sizing import compute_buy_quantity
@@ -86,61 +88,90 @@ class ExecutionEngine:
         async with self._lock(event.user_id, event.ticker):
             config = await _maybe_await(self._config(event.user_id, event.asset_class))
             execution_cfg = config.get("execution", {})
+            dedup_seconds = int(execution_cfg.get("dedup_window_seconds", 300))
+
+            # Persist the signal first, in its own committed transaction, so it's
+            # visible (GET /api/v1/signals, pages/StrategyDetail.tsx) even if
+            # everything below fails or raises — previously nothing was ever
+            # written here at all, so the Signals feed stayed empty forever.
             async with self._db.transaction() as session:
-                positions = PositionRepository(session)
-                orders = OrderRepository(session)
-
-                if await positions.get_open_by_ticker(event.user_id, event.ticker) is not None:
-                    await self._reject(event.ticker, event.user_id, "buy", "position already open")
+                signal_service = SignalService(session, dedup_window_seconds=dedup_seconds)
+                if await signal_service.is_duplicate(event.user_id, event.ticker, "buy"):
                     return
+                signal = await signal_service.store_from_event(event)
+                signal_id = signal.id
 
-                price = float(await _maybe_await(self._quote(event.ticker)))
-                if price <= 0:
-                    await self._reject(event.ticker, event.user_id, "buy", "no price")
-                    return
+            try:
+                async with self._db.transaction() as session:
+                    positions = PositionRepository(session)
+                    orders = OrderRepository(session)
+                    signal_service = SignalService(session)
+                    signal = await SignalRepository(session).get_by_id(signal_id)
 
-                broker = await _maybe_await(self._resolve_broker(event.user_id, event.asset_class))
-                summary = await broker.get_account_summary()
-                quantity = compute_buy_quantity(
-                    mode=execution_cfg.get("quantity_mode", "fixed_usd"),
-                    price=price,
-                    config=execution_cfg,
-                    portfolio_value=summary.equity,
-                    confidence=event.confidence,
-                )
-                if quantity <= 0:
-                    await self._reject(event.ticker, event.user_id, "buy", "zero quantity")
-                    return
+                    if await positions.get_open_by_ticker(event.user_id, event.ticker) is not None:
+                        await signal_service.mark_blocked(signal, reason="position already open")
+                        await self._reject(event.ticker, event.user_id, "buy", "position already open")
+                        return
 
-                result = await broker.place_market_order(
-                    event.ticker, quantity, asset_class=event.asset_class
-                )
-                if result.status == OrderStatus.rejected.value:
-                    await self._reject(event.ticker, event.user_id, "buy", result.reason or "broker rejected")
-                    return
+                    price = float(await _maybe_await(self._quote(event.ticker)))
+                    if price <= 0:
+                        await signal_service.mark_blocked(signal, reason="no price")
+                        await self._reject(event.ticker, event.user_id, "buy", "no price")
+                        return
 
-                fill_price = result.avg_price or price
-                now = datetime.now(timezone.utc)
-                position = await positions.create(
-                    user_id=event.user_id,
-                    ticker=event.ticker,
-                    asset_class=event.asset_class,
-                    quantity=quantity,
-                    avg_price=fill_price,
-                    status=PositionStatus.open.value,
-                    opened_at=now,
-                )
-                await orders.create(
-                    user_id=event.user_id,
-                    ticker=event.ticker,
-                    side=OrderSide.buy.value,
-                    quantity=quantity,
-                    price=fill_price,
-                    status=OrderStatus.filled.value,
-                    broker_order_id=result.broker_order_id,
-                    position_id=position.id,
-                    paper=result.paper,
-                )
+                    broker = await _maybe_await(self._resolve_broker(event.user_id, event.asset_class))
+                    summary = await broker.get_account_summary()
+                    quantity = compute_buy_quantity(
+                        mode=execution_cfg.get("quantity_mode", "fixed_usd"),
+                        price=price,
+                        config=execution_cfg,
+                        portfolio_value=summary.equity,
+                        confidence=event.confidence,
+                    )
+                    if quantity <= 0:
+                        await signal_service.mark_blocked(signal, reason="zero quantity")
+                        await self._reject(event.ticker, event.user_id, "buy", "zero quantity")
+                        return
+
+                    result = await broker.place_market_order(
+                        event.ticker, quantity, asset_class=event.asset_class
+                    )
+                    if result.status == OrderStatus.rejected.value:
+                        reason = result.reason or "broker rejected"
+                        await signal_service.mark_blocked(signal, reason=reason)
+                        await self._reject(event.ticker, event.user_id, "buy", reason)
+                        return
+
+                    fill_price = result.avg_price or price
+                    now = datetime.now(timezone.utc)
+                    position = await positions.create(
+                        user_id=event.user_id,
+                        ticker=event.ticker,
+                        asset_class=event.asset_class,
+                        quantity=quantity,
+                        avg_price=fill_price,
+                        status=PositionStatus.open.value,
+                        opened_at=now,
+                    )
+                    await orders.create(
+                        user_id=event.user_id,
+                        ticker=event.ticker,
+                        side=OrderSide.buy.value,
+                        quantity=quantity,
+                        price=fill_price,
+                        status=OrderStatus.filled.value,
+                        broker_order_id=result.broker_order_id,
+                        position_id=position.id,
+                        paper=result.paper,
+                    )
+                    await signal_service.mark_acted(signal)
+            except Exception as exc:  # noqa: BLE001 - always leave a trace on the signal
+                _logger.error("handle_buy failed for user %s/%s: %s", event.user_id, event.ticker, exc)
+                async with self._db.transaction() as session:
+                    failed = await SignalRepository(session).get_by_id(signal_id)
+                    if failed is not None and failed.status == SignalStatus.new.value:
+                        await SignalService(session).mark_blocked(failed, reason=str(exc))
+                return
 
             await self._publish(
                 OrderFilledEvent(
@@ -155,57 +186,81 @@ class ExecutionEngine:
 
     async def handle_sell(self, event: SellSignalEvent) -> None:
         async with self._lock(event.user_id, event.ticker):
+            # No dedup check for sells (unlike handle_buy) — a legitimate partial exit
+            # followed shortly by a second sell of the remainder is normal, expected
+            # behavior, not signal spam; selling is already naturally gated below by
+            # requiring an open position.
             async with self._db.transaction() as session:
-                positions = PositionRepository(session)
-                orders = OrderRepository(session)
+                signal_service = SignalService(session)
+                signal = await signal_service.store_from_event(event)
+                signal_id = signal.id
 
-                position = await positions.get_open_by_ticker(event.user_id, event.ticker)
-                if position is None:
-                    await self._reject(event.ticker, event.user_id, "sell", "no open position")
-                    return
+            try:
+                async with self._db.transaction() as session:
+                    positions = PositionRepository(session)
+                    orders = OrderRepository(session)
+                    signal_service = SignalService(session)
+                    signal = await SignalRepository(session).get_by_id(signal_id)
 
-                if event.quantity_pct is None:
-                    quantity = position.quantity
-                else:
-                    quantity = min(position.quantity, position.quantity * event.quantity_pct / 100.0)
-                if quantity <= 0:
-                    await self._reject(event.ticker, event.user_id, "sell", "zero quantity")
-                    return
+                    position = await positions.get_open_by_ticker(event.user_id, event.ticker)
+                    if position is None:
+                        await signal_service.mark_blocked(signal, reason="no open position")
+                        await self._reject(event.ticker, event.user_id, "sell", "no open position")
+                        return
 
-                price = float(await _maybe_await(self._quote(event.ticker)))
-                broker = await _maybe_await(self._resolve_broker(event.user_id, event.asset_class))
+                    if event.quantity_pct is None:
+                        quantity = position.quantity
+                    else:
+                        quantity = min(position.quantity, position.quantity * event.quantity_pct / 100.0)
+                    if quantity <= 0:
+                        await signal_service.mark_blocked(signal, reason="zero quantity")
+                        await self._reject(event.ticker, event.user_id, "sell", "zero quantity")
+                        return
 
-                result = await broker.place_market_order(
-                    event.ticker, -quantity, asset_class=event.asset_class
-                )
-                if result.status == OrderStatus.rejected.value:
-                    await self._reject(event.ticker, event.user_id, "sell", result.reason or "broker rejected")
-                    return
+                    price = float(await _maybe_await(self._quote(event.ticker)))
+                    broker = await _maybe_await(self._resolve_broker(event.user_id, event.asset_class))
 
-                fill_price = result.avg_price or price
-                remaining = position.quantity - quantity
-                now = datetime.now(timezone.utc)
-                if remaining <= 1e-9:
-                    await positions.update(
-                        position,
-                        quantity=0.0,
-                        status=PositionStatus.closed.value,
-                        closed_at=now,
+                    result = await broker.place_market_order(
+                        event.ticker, -quantity, asset_class=event.asset_class
                     )
-                else:
-                    await positions.update(position, quantity=remaining)
+                    if result.status == OrderStatus.rejected.value:
+                        reason = result.reason or "broker rejected"
+                        await signal_service.mark_blocked(signal, reason=reason)
+                        await self._reject(event.ticker, event.user_id, "sell", reason)
+                        return
 
-                await orders.create(
-                    user_id=event.user_id,
-                    ticker=event.ticker,
-                    side=OrderSide.sell.value,
-                    quantity=quantity,
-                    price=fill_price,
-                    status=OrderStatus.filled.value,
-                    broker_order_id=result.broker_order_id,
-                    position_id=position.id,
-                    paper=result.paper,
-                )
+                    fill_price = result.avg_price or price
+                    remaining = position.quantity - quantity
+                    now = datetime.now(timezone.utc)
+                    if remaining <= 1e-9:
+                        await positions.update(
+                            position,
+                            quantity=0.0,
+                            status=PositionStatus.closed.value,
+                            closed_at=now,
+                        )
+                    else:
+                        await positions.update(position, quantity=remaining)
+
+                    await orders.create(
+                        user_id=event.user_id,
+                        ticker=event.ticker,
+                        side=OrderSide.sell.value,
+                        quantity=quantity,
+                        price=fill_price,
+                        status=OrderStatus.filled.value,
+                        broker_order_id=result.broker_order_id,
+                        position_id=position.id,
+                        paper=result.paper,
+                    )
+                    await signal_service.mark_acted(signal)
+            except Exception as exc:  # noqa: BLE001 - always leave a trace on the signal
+                _logger.error("handle_sell failed for user %s/%s: %s", event.user_id, event.ticker, exc)
+                async with self._db.transaction() as session:
+                    failed = await SignalRepository(session).get_by_id(signal_id)
+                    if failed is not None and failed.status == SignalStatus.new.value:
+                        await SignalService(session).mark_blocked(failed, reason=str(exc))
+                return
 
             await self._publish(
                 OrderFilledEvent(

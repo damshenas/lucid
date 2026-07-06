@@ -8,7 +8,7 @@ window. A TTL cache short-circuits the DB check when provided.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from src.conf.schema import AssetClass
 from src.modules.bus import BuySignalEvent, SellSignalEvent
@@ -91,8 +91,14 @@ class SignalService:
             )
         return updated
 
-    async def mark_blocked(self, signal: Signal) -> Signal:
-        return await self._repo.update(signal, status=SignalStatus.blocked.value)
+    async def mark_blocked(self, signal: Signal, *, reason: str | None = None) -> Signal:
+        values: dict[str, Any] = {"status": SignalStatus.blocked.value}
+        if reason:
+            # Append the execution-level reason to the strategy's own reasoning so the
+            # full "why" (decided to act, but then blocked because ...) is visible in
+            # one place (see GET /api/v1/signals, pages/StrategyDetail.tsx).
+            values["reasoning"] = f"{signal.reasoning} — blocked: {reason}" if signal.reasoning else reason
+        return await self._repo.update(signal, **values)
 
     async def record_outcome(
         self,

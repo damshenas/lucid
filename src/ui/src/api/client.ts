@@ -2,6 +2,7 @@ import type {
   AdminUser,
   BacktestResult,
   CredentialCatalogItem,
+  Decision,
   GitSyncResult,
   Job,
   MyCredentials,
@@ -15,6 +16,7 @@ import type {
   WatchlistItem,
 } from "../types";
 import { setServerOnline } from "../lib/serverStatus";
+import { markSessionExpired } from "../lib/sessionExpiry";
 
 const TOKEN_KEY = "lucid_access_token";
 
@@ -48,6 +50,14 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   setServerOnline(true);
 
   if (!response.ok) {
+    // Only a *previously authenticated* request (one that actually sent a token)
+    // failing with 401 means the session itself expired/was invalidated — a bare
+    // login/setup attempt with no token yet also 401s on wrong credentials, which
+    // is a normal inline form error, not a session expiry (see pages/Login.tsx).
+    if (response.status === 401 && token) {
+      setToken(null);
+      markSessionExpired();
+    }
     const detail = await response.text();
     throw new Error(`${response.status}: ${detail}`);
   }
@@ -78,6 +88,10 @@ export const api = {
     request(`/api/v1/strategies/${name}/activate?direction=${direction}`, {
       method: "PATCH",
     }),
+  strategyDecisions: (name: string, limit = 50, offset = 0) =>
+    request<Decision[]>(
+      `/api/v1/strategies/${encodeURIComponent(name)}/decisions?limit=${limit}&offset=${offset}`,
+    ),
   settingsSchema: () => request<SettingsSchema>("/api/v1/settings/schema"),
   settingsValues: () => request<Record<string, unknown>>("/api/v1/settings"),
   saveSettings: (values: Record<string, unknown>) =>
