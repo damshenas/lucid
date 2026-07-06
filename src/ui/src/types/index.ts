@@ -85,6 +85,12 @@ export interface WatchlistItem {
    * daily fetch every watchlist ticker gets regardless of this value. */
   poll_interval: "1m" | "1h";
   has_bars: boolean;
+  /** False for a ticker surfaced only because it has stored price bars on disk
+   * (e.g. an ad-hoc backfill) but was never actually added to the watchlist — it
+   * powers the ticker autocomplete (pages/Prices.tsx) but is NOT a real, saved
+   * watchlist row: PATCH/DELETE on it 404s the same as any unknown ticker, so the
+   * Settings > Watchlist UI must never treat it as pre-existing. */
+  on_watchlist: boolean;
 }
 
 export interface BacktestResult {

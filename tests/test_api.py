@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
+import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
 from src.api.context import AppContext
 from src.api.main import create_app
+from src.modules.price import storage
 
 
 @pytest.fixture
@@ -306,6 +308,7 @@ def test_price_watchlist_crud(client: TestClient) -> None:
             "enabled": True,
             "poll_interval": "1h",
             "has_bars": False,
+            "on_watchlist": True,
         }
     ]
 
@@ -336,6 +339,61 @@ def test_price_watchlist_crud(client: TestClient) -> None:
     assert remove.status_code == 204
     assert client.get("/api/v1/prices/watchlist", headers=_auth(trader_token)).json() == []
     assert client.delete("/api/v1/prices/watchlist/AMZN", headers=_auth(trader_token)).status_code == 404
+
+
+def test_watchlist_disk_only_tickers_are_not_editable(tmp_path) -> None:
+    """Regression: a ticker with stored bars but never actually POSTed to the
+    watchlist (e.g. an ad-hoc backfill, or the migrate_legacy_prices script) used to
+    be indistinguishable from a real entry in GET /watchlist's response — the
+    Settings > Watchlist UI would let a user "toggle" it and then 404 on Save
+    (PATCH/DELETE on a ticker never actually added). ``on_watchlist`` now marks which
+    rows are real."""
+    ctx = AppContext.build(database_url="sqlite+aiosqlite:///:memory:")
+    ctx.settings.price.storage_path = str(tmp_path)
+    app = create_app(ctx)
+    with TestClient(app) as client:
+        admin_token = client.post(
+            "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
+        ).json()["access_token"]
+        client.post(
+            "/api/v1/admin/users",
+            headers=_auth(admin_token),
+            json={"username": "trader5", "password": "traderpass", "role": "trader"},
+        )
+        trader_token = client.post(
+            "/api/v1/auth/login", json={"username": "trader5", "password": "traderpass"}
+        ).json()["access_token"]
+
+        # A ticker with bars on disk but no price_watchlist row at all.
+        df = pd.DataFrame(
+            {"open": [1.0], "high": [1.0], "low": [1.0], "close": [1.0], "volume": [1.0]},
+            index=pd.to_datetime(["2024-01-01"]),
+        )
+        storage.write_bars(tmp_path, "GHOST", "1d", df)
+
+        client.post(
+            "/api/v1/prices/watchlist",
+            headers=_auth(trader_token),
+            json={"ticker": "amzn", "asset_class": "equity"},
+        )
+
+        listing = {
+            row["ticker"]: row
+            for row in client.get("/api/v1/prices/watchlist", headers=_auth(trader_token)).json()
+        }
+        assert listing["AMZN"]["on_watchlist"] is True
+        assert listing["GHOST"]["on_watchlist"] is False
+
+        # Same 404 as any other never-added ticker — a disk-only entry is never
+        # editable until it's actually POSTed.
+        assert (
+            client.patch(
+                "/api/v1/prices/watchlist/GHOST",
+                headers=_auth(trader_token),
+                json={"poll_interval": "1m"},
+            ).status_code
+            == 404
+        )
 
 
 def test_log_level_applied_live_unless_env_override(monkeypatch) -> None:

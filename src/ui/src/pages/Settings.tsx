@@ -3,6 +3,8 @@ import { api } from "../api/client";
 import { Button } from "../components/ui/Button";
 import { Tabs, type TabDef } from "../components/ui/Tabs";
 import { useAuth } from "../hooks/useAuth";
+import { useUnsavedChangesGuard } from "../hooks/useUnsavedChangesGuard";
+import { useWatchlistDraft } from "../hooks/useWatchlistDraft";
 import { hasPermission } from "../lib/permissions";
 import type { Role } from "../lib/permissions";
 import type { SettingsSchema, Strategy } from "../types";
@@ -44,6 +46,7 @@ export function Settings() {
   const [edited, setEdited] = useState<Record<string, unknown>>({});
   const [status, setStatus] = useState<Status | null>(null);
   const [saving, setSaving] = useState(false);
+  const watchlistDraft = useWatchlistDraft();
 
   function refreshStrategies() {
     return api
@@ -73,6 +76,9 @@ export function Settings() {
     return () => clearTimeout(timer);
   }, [status]);
 
+  const dirty = Object.keys(edited).length > 0 || watchlistDraft.dirty;
+  useUnsavedChangesGuard(dirty);
+
   const tree = useMemo(() => buildSchemaTree(schema), [schema]);
   const schemaLoaded = Object.keys(schema).length > 0;
 
@@ -87,7 +93,12 @@ export function Settings() {
   async function save() {
     setSaving(true);
     try {
-      await api.saveSettings(edited);
+      if (Object.keys(edited).length > 0) {
+        await api.saveSettings(edited);
+      }
+      if (watchlistDraft.dirty) {
+        await watchlistDraft.commit();
+      }
       // Refetch (and apply it) *before* clearing `edited` — otherwise there's a
       // render in between with `edited` already cleared but `schema` still the stale
       // snapshot fetched at mount, which briefly (or, if the refetch is slow/fails,
@@ -163,7 +174,11 @@ export function Settings() {
           <Tabs
             level="nested"
             tabs={[
-              { id: "watchlist", label: "Watchlist", content: <WatchlistTab canManage={canStrategy} /> },
+              {
+                id: "watchlist",
+                label: "Watchlist",
+                content: <WatchlistTab watchlist={watchlistDraft} canManage={canStrategy} />,
+              },
               { id: "settings", label: "Settings", content: schemaTab("price") },
             ]}
           />
@@ -226,7 +241,7 @@ export function Settings() {
       <Tabs tabs={tabs} />
 
       {(canSystem || canStrategy) && (
-        <Button onClick={save} disabled={saving || Object.keys(edited).length === 0} className="w-full">
+        <Button onClick={save} disabled={saving || !dirty} className="w-full">
           {saving ? "Saving…" : "Save changes"}
         </Button>
       )}

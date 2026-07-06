@@ -55,13 +55,17 @@ async def list_watchlist(
             "enabled": row.enabled,
             "poll_interval": row.poll_interval,
             "has_bars": storage.read_bars(storage_path, row.ticker, "1d") is not None,
+            "on_watchlist": True,
         }
         for row in rows
     ]
     # Also surface any ticker with stored bars from before it was (or without ever
     # being) added to the watchlist — e.g. an ad-hoc backfill from the Prices page —
     # so the ticker autocomplete (see pages/Prices.tsx) covers every known ticker,
-    # not only ones already on the watchlist.
+    # not only ones already on the watchlist. Marked on_watchlist=False so a client
+    # never mistakes one of these for a real, already-saved watchlist row (a POST is
+    # still required to actually add it — a PATCH/DELETE for a ticker like this 404s,
+    # same as for any other unknown ticker).
     known = {r["ticker"] for r in result}
     for ticker in storage.list_tickers(storage_path, "1d"):
         if ticker not in known:
@@ -72,6 +76,7 @@ async def list_watchlist(
                     "enabled": False,
                     "poll_interval": "1h",
                     "has_bars": True,
+                    "on_watchlist": False,
                 }
             )
     return sorted(result, key=lambda r: r["ticker"])
