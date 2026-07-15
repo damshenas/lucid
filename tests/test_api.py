@@ -10,12 +10,26 @@ from fastapi.testclient import TestClient
 
 from src.api.context import AppContext
 from src.api.main import create_app
+from src.modules.broker import BrokerRegistry, PaperBroker
 from src.modules.price import storage
+
+
+def _mock_broker_registry() -> BrokerRegistry:
+    """A broker registry that maps 'trading212' to a PaperBroker — no
+    network calls, no credentials required.  Used in API integration tests
+    that exercise the execution/position layer without hitting Trading212."""
+    registry = BrokerRegistry()
+    paper = PaperBroker()
+    registry.register("trading212", "equity", lambda **kw: paper)
+    return registry
 
 
 @pytest.fixture
 def client() -> Iterator[TestClient]:
-    ctx = AppContext.build(database_url="sqlite+aiosqlite:///:memory:")
+    ctx = AppContext.build(
+        database_url="sqlite+aiosqlite:///:memory:",
+        broker_registry=_mock_broker_registry(),
+    )
     app = create_app(ctx)
     with TestClient(app) as test_client:
         yield test_client
@@ -292,6 +306,46 @@ def test_manual_order_trader_only(client: TestClient) -> None:
         json={"ticker": "AAPL", "side": "sell", "quantity": 999},
     )
     assert resp.status_code == 400
+
+
+def test_sync_reflects_broker_positions_after_manual_order(client: TestClient) -> None:
+    """After placing a manual order, POST /positions/sync must query the broker
+    and keep positions that the broker reports (not close them).  Previously the
+    code routed paper_mode=True to an ephemeral in-memory PaperBroker instead of
+    the real Trading212 paper account, so the broker had no knowledge of the order
+    and sync closed the local position."""
+    admin_token = client.post(
+        "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
+    ).json()["access_token"]
+    client.post(
+        "/api/v1/admin/users",
+        headers=_auth(admin_token),
+        json={"username": "trader1", "password": "traderpass", "role": "trader"},
+    )
+    token = client.post(
+        "/api/v1/auth/login", json={"username": "trader1", "password": "traderpass"}
+    ).json()["access_token"]
+
+    # Place a manual order — the mock broker fills it and tracks the position.
+    resp = client.post(
+        "/api/v1/orders/manual",
+        headers=_auth(token),
+        json={"ticker": "AMZN", "side": "buy", "quantity": 1},
+    )
+    assert resp.status_code == 201
+
+    # Position is visible before sync.
+    positions = client.get("/api/v1/positions", headers=_auth(token)).json()
+    assert any(p["ticker"] == "AMZN" for p in positions)
+
+    # Sync queries the broker; it reports AMZN so the position is updated, not closed.
+    sync_resp = client.post("/api/v1/positions/sync", headers=_auth(token))
+    assert sync_resp.status_code == 200
+    assert sync_resp.json()["closed"] == 0
+
+    # Position must still be open after the sync.
+    positions_after = client.get("/api/v1/positions", headers=_auth(token)).json()
+    assert any(p["ticker"] == "AMZN" for p in positions_after)
 
 
 def test_admin_reports_permission_and_empty_state(client: TestClient) -> None:

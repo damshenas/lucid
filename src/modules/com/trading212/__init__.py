@@ -85,8 +85,9 @@ class Trading212Client:
 class Trading212Broker(Broker):
     name = "trading212"
 
-    def __init__(self, client: Trading212Client) -> None:
+    def __init__(self, client: Trading212Client, *, paper: bool = False) -> None:
         self._client = client
+        self._paper = paper
 
     async def place_market_order(
         self, ticker: str, quantity: float, *, asset_class: str = AssetClass.equity.value
@@ -100,7 +101,7 @@ class Trading212Broker(Broker):
             status=str(data.get("status", "pending")).lower(),
             broker_order_id=str(data["id"]) if data.get("id") is not None else None,
             avg_price=data.get("fillPrice"),
-            paper=False,
+            paper=self._paper,
         )
 
     async def get_positions(self) -> list[BrokerPosition]:

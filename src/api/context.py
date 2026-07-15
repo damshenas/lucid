@@ -54,6 +54,11 @@ class AppContext:
     strategies_root: str
     ext_strategies_root: str
     builtin_strategies_root: str
+    # When True (default), resolve_broker loads Trading212 credentials from the
+    # credential store before calling the registry factory.  Set to False when
+    # an external broker_registry is injected (e.g. in tests) whose factories
+    # do not require platform credentials.
+    broker_credentials_required: bool = True
 
     @property
     def is_sqlite(self) -> bool:
@@ -77,24 +82,28 @@ class AppContext:
         broker_cfg = values.get("broker", {})
         broker_name = broker_cfg.get("broker_name", "trading212")
         paper_mode = bool(broker_cfg.get("paper_mode", True))
-        if paper_mode:
+        if self.broker_credentials_required:
+            creds = self.credential_manager(session)
+            try:
+                api_key = await creds.get_for_user("trading212_api_key", user_id)
+                base_url = await creds.get_for_user("trading212_base_url", user_id)
+            except CredentialNotConfiguredError as exc:
+                raise CredentialNotConfiguredError(
+                    "broker requires trading212 credentials"
+                ) from exc
             return self.broker_registry.resolve(
-                broker_name=broker_name, asset_class=asset_class, paper_mode=True
+                broker_name=broker_name,
+                asset_class=asset_class,
+                paper_mode=False,
+                api_key=api_key,
+                base_url=base_url,
+                paper=paper_mode,
             )
-        creds = self.credential_manager(session)
-        try:
-            api_key = await creds.get_for_user("trading212_api_key", user_id)
-            base_url = await creds.get_for_user("trading212_base_url", user_id)
-        except CredentialNotConfiguredError as exc:
-            raise CredentialNotConfiguredError(
-                "live broker requires trading212 credentials"
-            ) from exc
         return self.broker_registry.resolve(
             broker_name=broker_name,
             asset_class=asset_class,
             paper_mode=False,
-            api_key=api_key,
-            base_url=base_url,
+            paper=paper_mode,
         )
 
     # -- construction ------------------------------------------------------
@@ -108,6 +117,7 @@ class AppContext:
         strategies_root: str | None = None,
         ext_strategies_root: str | None = None,
         builtin_strategies_root: str | None = None,
+        broker_registry: BrokerRegistry | None = None,
     ) -> AppContext:
         database_url = database_url or os.environ.get("DATABASE_URL")
         if not database_url:
@@ -148,14 +158,17 @@ class AppContext:
         config_defaults = load_default_config(config_path)
         settings = LucidConfig.model_validate(config_defaults)
 
-        broker_registry = BrokerRegistry()
-        broker_registry.register(
-            "trading212",
-            "equity",
-            lambda **kw: Trading212Broker(
-                Trading212Client(kw["api_key"], kw["base_url"])
-            ),
-        )
+        custom_registry = broker_registry is not None
+        if not custom_registry:
+            broker_registry = BrokerRegistry()
+            broker_registry.register(
+                "trading212",
+                "equity",
+                lambda **kw: Trading212Broker(
+                    Trading212Client(kw["api_key"], kw["base_url"]),
+                    paper=bool(kw.get("paper", False)),
+                ),
+            )
 
         return cls(
             db=Database(database_url),
@@ -168,4 +181,5 @@ class AppContext:
             strategies_root=strategies_root,
             ext_strategies_root=ext_strategies_root,
             builtin_strategies_root=builtin_strategies_root,
+            broker_credentials_required=not custom_registry,
         )
