@@ -31,6 +31,11 @@ class SellSignalEvent(Event):
     confidence: float | None = None
     reasoning: str | None = None
     quantity_pct: float | None = None  # None -> full exit
+    # Which profit-take tier (1 or 2) this sell fulfills, if any — lets
+    # ExecutionEngine.handle_sell mark Position.profit_tier{1,2}_taken so a tiered
+    # sell strategy (e.g. strategies/sell/trailing_stop.py) never re-fires the same
+    # tier on a later evaluation. None for a stop-loss exit or any non-tiered sell.
+    profit_tier: int | None = None
 
 
 @dataclass(slots=True)

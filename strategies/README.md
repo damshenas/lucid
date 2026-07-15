@@ -176,8 +176,15 @@ Pure functions, no DB/network — import directly:
 ```python
 from src.modules.price.indicators import rsi, macd, atr, bollinger, compute_snapshot
 from src.modules.price import regime
-regime.detect(benchmark_df)  # "bull" | "bear" | "neutral"
+regime.detect(context.benchmark_data)  # "bull" | "bear" | "neutral"
 ```
+
+`context.benchmark_data` (`StrategyContext`) is daily OHLCV for the configured
+benchmark ticker (`price.benchmark_ticker`, default `"SPY"`), loaded once per
+`TradingRuntime.run_strategies` pass — `None` if no bars are stored for it yet. The
+built-in `trailing_stop` sell strategy is the one shipped example that consumes this
+today (widens its ATR stop multiplier in a `"bear"` regime); it's available to any
+other strategy that wants it, built-in or custom.
 
 ## 7. Which tickers actually get evaluated (read this if a strategy "does nothing")
 

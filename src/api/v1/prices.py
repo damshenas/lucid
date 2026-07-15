@@ -20,6 +20,7 @@ from ..deps import get_context, get_current_user, get_session, require_permissio
 router = APIRouter(prefix="/api/v1/prices", tags=["prices"])
 
 PollInterval = Literal["1m", "1h"]
+Region = Literal["us", "eu", "em"]
 
 
 class BackfillIn(BaseModel):
@@ -31,11 +32,13 @@ class WatchlistIn(BaseModel):
     ticker: str
     asset_class: str = "equity"
     poll_interval: PollInterval = "1h"
+    region: Region = "us"
 
 
 class WatchlistPatch(BaseModel):
     enabled: bool | None = None
     poll_interval: PollInterval | None = None
+    region: Region | None = None
 
 
 # Registered before the "/{ticker}" catch-all below so "/watchlist" doesn't get
@@ -54,6 +57,7 @@ async def list_watchlist(
             "asset_class": row.asset_class,
             "enabled": row.enabled,
             "poll_interval": row.poll_interval,
+            "region": row.region,
             "has_bars": storage.read_bars(storage_path, row.ticker, "1d") is not None,
             "on_watchlist": True,
         }
@@ -75,6 +79,7 @@ async def list_watchlist(
                     "asset_class": "equity",
                     "enabled": False,
                     "poll_interval": "1h",
+                    "region": "us",
                     "has_bars": True,
                     "on_watchlist": False,
                 }
@@ -89,7 +94,7 @@ async def add_to_watchlist(
     user: User = Depends(require_permission(Permission.edit_own_strategies)),
 ) -> dict[str, Any]:
     row = await PriceWatchlistRepository(session).upsert(
-        body.ticker, asset_class=body.asset_class, poll_interval=body.poll_interval
+        body.ticker, asset_class=body.asset_class, poll_interval=body.poll_interval, region=body.region
     )
     await session.commit()
     return {
@@ -97,6 +102,7 @@ async def add_to_watchlist(
         "asset_class": row.asset_class,
         "enabled": row.enabled,
         "poll_interval": row.poll_interval,
+        "region": row.region,
     }
 
 
@@ -117,6 +123,10 @@ async def update_watchlist_item(
         row = await repo.set_poll_interval(ticker, body.poll_interval)
         if row is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"'{ticker}' is not on the watchlist")
+    if body.region is not None:
+        row = await repo.set_region(ticker, body.region)
+        if row is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"'{ticker}' is not on the watchlist")
     if row is None:
         row = await repo.get_by_ticker(ticker.upper())
         if row is None:
@@ -127,6 +137,7 @@ async def update_watchlist_item(
         "asset_class": row.asset_class,
         "enabled": row.enabled,
         "poll_interval": row.poll_interval,
+        "region": row.region,
     }
 
 

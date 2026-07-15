@@ -63,7 +63,7 @@ class AuthService:
         )
 
     async def create_user(
-        self, username: str, password: str, role: str = Role.viewer.value
+        self, username: str, password: str, role: str = Role.analyst.value
     ) -> User:
         if await self._users.get_by_username(username) is not None:
             raise AuthError(f"username '{username}' already exists")

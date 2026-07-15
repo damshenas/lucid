@@ -14,6 +14,13 @@ class PositionView:
     ticker: str
     quantity: float
     avg_price: float
+    # Whether a tiered sell strategy (e.g. strategies/sell/trailing_stop.py) has
+    # already fired its first/second profit-take tier for this position — see
+    # SellSignalEvent.profit_tier and ExecutionEngine.handle_sell, which flips these
+    # via PositionRepository.mark_tier_taken once a tiered sell fills. Always False
+    # for a freshly (re)opened position.
+    tier1_taken: bool = False
+    tier2_taken: bool = False
 
 
 @dataclass(slots=True)
@@ -29,6 +36,12 @@ class StrategyContext:
     # See src/modules/signal/sources.py for what counts as a "source" and how a
     # rating is normalized.
     external_signals: list[ExternalSignal] = field(default_factory=list)
+    # Daily OHLCV bars for the configured benchmark ticker (``price.benchmark_ticker``,
+    # default "SPY"), loaded once per TradingRuntime.run_strategies pass — a strategy
+    # that wants market-regime context calls
+    # ``src.modules.price.regime.detect(context.benchmark_data)`` rather than fetching
+    # it itself. ``None`` if no bars are stored yet for that ticker.
+    benchmark_data: Any | None = None
 
     def strategy_config(self, name: str) -> dict[str, Any]:
         """Return the resolved config sub-dict for a named strategy."""

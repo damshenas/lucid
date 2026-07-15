@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { UserPlus } from "lucide-react";
+import { KeyRound, Power, Trash2, UserPlus } from "lucide-react";
 import { api } from "../api/client";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
@@ -7,15 +7,16 @@ import { Card } from "../components/ui/Card";
 import { Select } from "../components/ui/Select";
 import type { AdminUser } from "../types";
 
-const ROLES = ["viewer", "trader", "admin"];
+const ROLES = ["analyst", "trader", "admin"];
 
 export function Users() {
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<number | null>(null);
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState("viewer");
+  const [role, setRole] = useState("analyst");
   const [creating, setCreating] = useState(false);
 
   function refresh() {
@@ -32,12 +33,66 @@ export function Users() {
       await api.createAdminUser(username, password, role);
       setUsername("");
       setPassword("");
-      setRole("viewer");
+      setRole("analyst");
       refresh();
     } catch (err) {
       setError((err as Error).message);
     } finally {
       setCreating(false);
+    }
+  }
+
+  async function changeRole(u: AdminUser, newRole: string) {
+    setBusyId(u.id);
+    setError(null);
+    try {
+      await api.updateAdminUser(u.id, { role: newRole });
+      refresh();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function toggleActive(u: AdminUser) {
+    setBusyId(u.id);
+    setError(null);
+    try {
+      await api.updateAdminUser(u.id, { is_active: u.is_active === false });
+      refresh();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function resetPassword(u: AdminUser) {
+    const newPassword = window.prompt(`New password for "${u.username}" (min 8 chars):`);
+    if (!newPassword) return;
+    setBusyId(u.id);
+    setError(null);
+    try {
+      await api.resetUserPassword(u.id, newPassword);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function deleteUser(u: AdminUser) {
+    if (!window.confirm(`Delete user "${u.username}"? This cannot be undone.`)) return;
+    setBusyId(u.id);
+    setError(null);
+    try {
+      await api.deleteAdminUser(u.id);
+      refresh();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusyId(null);
     }
   }
 
@@ -59,6 +114,7 @@ export function Users() {
                 <th className="px-4 py-3 font-medium">Username</th>
                 <th className="px-4 py-3 font-medium">Role</th>
                 <th className="px-4 py-3 font-medium">Active</th>
+                <th className="px-4 py-3 font-medium">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
@@ -66,12 +122,51 @@ export function Users() {
                 <tr key={u.id} className="transition-colors hover:bg-white/5">
                   <td className="px-4 py-3 font-medium">{u.username}</td>
                   <td className="px-4 py-3">
-                    <Badge tone="violet">{u.role}</Badge>
+                    <Select
+                      value={u.role}
+                      disabled={busyId === u.id}
+                      onChange={(e) => changeRole(u, e.target.value)}
+                      className="w-28"
+                    >
+                      {ROLES.map((r) => (
+                        <option key={r} value={r} className="bg-surface">
+                          {r}
+                        </option>
+                      ))}
+                    </Select>
                   </td>
                   <td className="px-4 py-3">
                     <Badge tone={u.is_active === false ? "rose" : "cyan"}>
                       {u.is_active === false ? "inactive" : "active"}
                     </Badge>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="ghost"
+                        disabled={busyId === u.id}
+                        onClick={() => resetPassword(u)}
+                        title="Reset password"
+                      >
+                        <KeyRound size={16} />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        disabled={busyId === u.id}
+                        onClick={() => toggleActive(u)}
+                        title={u.is_active === false ? "Activate" : "Deactivate"}
+                      >
+                        <Power size={16} />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        disabled={busyId === u.id}
+                        onClick={() => deleteUser(u)}
+                        title="Delete user"
+                      >
+                        <Trash2 size={16} />
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -119,3 +214,4 @@ export function Users() {
     </div>
   );
 }
+

@@ -81,4 +81,84 @@ async def test_trailing_stop_profit_take_partial() -> None:
     decision = await strat.run(ctx)
     assert decision.acted
     assert decision.event is not None
-    assert decision.event.quantity_pct == 50.0  # partial profit take
+    assert decision.event.quantity_pct == 33.0  # tier-1 default partial take
+    assert decision.event.profit_tier == 1
+
+
+async def test_trailing_stop_tier1_skipped_if_already_taken() -> None:
+    strat = _LOADED["trailing_stop"]
+    values = np.linspace(100.0, 130.0, 60)  # +30%, above tier-1 (20%) not tier-2 (50%)
+    ctx = StrategyContext(
+        ticker="AAPL", user_id=1, asset_class="equity",
+        price_data=_df(values),
+        position=PositionView(ticker="AAPL", quantity=10, avg_price=100.0, tier1_taken=True),
+    )
+    decision = await strat.run(ctx)
+    assert not decision.acted
+    assert decision.event is None
+
+
+async def test_trailing_stop_tier2_fires_after_tier1() -> None:
+    strat = _LOADED["trailing_stop"]
+    values = np.linspace(100.0, 160.0, 60)  # +60%, above both tiers
+    ctx = StrategyContext(
+        ticker="AAPL", user_id=1, asset_class="equity",
+        price_data=_df(values),
+        position=PositionView(ticker="AAPL", quantity=10, avg_price=100.0, tier1_taken=True),
+    )
+    decision = await strat.run(ctx)
+    assert decision.acted
+    assert decision.event is not None
+    assert decision.event.quantity_pct == 33.0  # tier-2 default partial take
+    assert decision.event.profit_tier == 2
+
+
+async def test_trailing_stop_both_tiers_taken_holds() -> None:
+    strat = _LOADED["trailing_stop"]
+    values = np.linspace(100.0, 160.0, 60)
+    ctx = StrategyContext(
+        ticker="AAPL", user_id=1, asset_class="equity",
+        price_data=_df(values),
+        position=PositionView(
+            ticker="AAPL", quantity=10, avg_price=100.0, tier1_taken=True, tier2_taken=True
+        ),
+    )
+    decision = await strat.run(ctx)
+    assert not decision.acted
+    assert decision.event is None
+
+
+async def test_trailing_stop_widens_via_bear_regime() -> None:
+    strat = _LOADED["trailing_stop"]
+    # A modest dip: with a very tight (bull/neutral) multiplier it breaks the stop;
+    # with a very wide bear-regime multiplier the same dip stays well above the
+    # (much lower) stop price regardless of the exact ATR value — the two
+    # multipliers are set far enough apart (0.5x vs 20x) that this holds for any
+    # positive ATR, so the test doesn't depend on computing ATR by hand.
+    values = np.concatenate([np.full(60, 200.0), np.linspace(200.0, 190.0, 5)])
+    benchmark = _df(np.linspace(200.0, 100.0, 260))  # clear downtrend -> "bear"
+    config = {
+        "strategy": {
+            "trailing_stop": {"atr_multiplier": 0.5, "bear_atr_multiplier": 20.0}
+        }
+    }
+
+    ctx_bull = StrategyContext(
+        ticker="AAPL", user_id=1, asset_class="equity",
+        config=config,
+        price_data=_df(values),
+        position=PositionView(ticker="AAPL", quantity=10, avg_price=200.0),
+    )
+    bull_decision = await strat.run(ctx_bull)
+
+    ctx_bear = StrategyContext(
+        ticker="AAPL", user_id=1, asset_class="equity",
+        config=config,
+        price_data=_df(values),
+        position=PositionView(ticker="AAPL", quantity=10, avg_price=200.0),
+        benchmark_data=benchmark,
+    )
+    bear_decision = await strat.run(ctx_bear)
+
+    assert bull_decision.acted  # tight 0.5x multiplier: stop breaks
+    assert not bear_decision.acted  # wide 20x bear multiplier: stop holds

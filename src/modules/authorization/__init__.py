@@ -2,13 +2,15 @@
 
 Roles and permissions (per plan.md):
 
-| Role   | Trading | Settings              | User Mgmt |
-|--------|---------|-----------------------|-----------|
-| admin  | No      | System defaults       | Yes       |
-| trader | Yes     | Own creds + strategies| No        |
-| viewer | No      | Password only         | No        |
+| Role    | Trading | Settings              | User Mgmt |
+|---------|---------|------------------------|-----------|
+| admin   | No      | System defaults       | Yes       |
+| trader  | Yes     | Own creds + strategies| No        |
+| analyst | No      | Own strategies only   | No        |
 
 Note: ``admin`` administers the system and users but does not place trades.
+``analyst`` can view trading data and manage/activate strategies (e.g. for
+research) but cannot place trades or manage credentials.
 """
 
 from __future__ import annotations
@@ -41,8 +43,9 @@ ROLE_PERMISSIONS: dict[str, set[Permission]] = {
         Permission.edit_own_strategies,
         Permission.change_password,
     },
-    Role.viewer.value: {
+    Role.analyst.value: {
         Permission.view_trading,
+        Permission.edit_own_strategies,
         Permission.change_password,
     },
 }

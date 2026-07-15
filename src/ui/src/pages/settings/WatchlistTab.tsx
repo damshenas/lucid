@@ -21,7 +21,7 @@ interface Props {
  * here: click a chip again (or remove it) to undo a local change before saving.
  */
 export function WatchlistTab({ watchlist, canManage }: Props) {
-  const { draft, loaded, error, addTicker, removeTicker, toggleInterval } = watchlist;
+  const { draft, loaded, error, addTicker, removeTicker, toggleInterval, cycleRegion } = watchlist;
   const [newTicker, setNewTicker] = useState("");
   const [newAssetClass, setNewAssetClass] = useState(ASSET_CLASSES[0]);
   const [addError, setAddError] = useState<string | null>(null);
@@ -63,6 +63,15 @@ export function WatchlistTab({ watchlist, canManage }: Props) {
               >
                 {item.ticker}
               </button>
+              <button
+                type="button"
+                onClick={() => canManage && cycleRegion(item.ticker)}
+                disabled={!canManage}
+                title={`Market-hours region: ${item.region.toUpperCase()} — click to cycle`}
+                className="rounded-full bg-black/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-current/70 disabled:cursor-default"
+              >
+                {item.region}
+              </button>
               {canManage && (
                 <button
                   type="button"
@@ -97,7 +106,8 @@ export function WatchlistTab({ watchlist, canManage }: Props) {
           Click a ticker to switch its price polling between{" "}
           <span className="text-cyan">1-hour (blue)</span> and{" "}
           <span className="text-emerald-400">1-minute (green)</span> — new tickers default to
-          1-hour. Changes here are local until you press the Save button below.
+          1-hour. Click the small region badge to cycle its market-hours gating between
+          US / EU / EM. Changes here are local until you press the Save button below.
         </p>
       </div>
 

@@ -76,16 +76,16 @@ async def test_set_secret_rejected(session: AsyncSession) -> None:
 async def test_set_value_requires_permission(session: AsyncSession) -> None:
     svc = ConfigService(session, _DEFAULTS)
     with pytest.raises(ConfigPermissionError):
-        await svc.set_value("execution.fixed_usd", 1.0, role="viewer", user_id=1)
+        await svc.set_value("execution.fixed_usd", 1.0, role="analyst", user_id=1)
     with pytest.raises(ConfigPermissionError):
         await svc.set_value("execution.fixed_usd", 1.0, role="trader", user_id=1)
     # admin may write general sections (globally) *and* strategy.* (the system
-    # default); trader may additionally write strategy.* for themselves only.
+    # default); trader/analyst may additionally write strategy.* for themselves only
+    # (both roles carry edit_own_strategies).
     await svc.set_value("execution.fixed_usd", 1.0, role="admin", user_id=1)
     await svc.set_value("strategy.active_buy_strategy", "trend_follow", role="admin", user_id=None)
     await svc.set_value("strategy.active_buy_strategy", "trend_follow", role="trader", user_id=1)
-    with pytest.raises(ConfigPermissionError):
-        await svc.set_value("strategy.active_buy_strategy", "trend_follow", role="viewer", user_id=1)
+    await svc.set_value("strategy.active_buy_strategy", "trend_follow", role="analyst", user_id=1)
 
 
 async def test_compile_schema_from_model(session: AsyncSession) -> None:

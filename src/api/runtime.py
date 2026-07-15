@@ -11,7 +11,11 @@ from typing import Any
 
 from src.modules.db.models.base import Role
 from src.modules.db.repositories.decision import StrategyDecisionRepository
-from src.modules.db.repositories.price import PriceFetchLogRepository, PriceWatchlistRepository
+from src.modules.db.repositories.price import (
+    PriceFetchAttemptRepository,
+    PriceFetchLogRepository,
+    PriceWatchlistRepository,
+)
 from src.modules.db.repositories.position import PositionRepository
 from src.modules.db.repositories.user import UserRepository
 from src.modules.com import yahoofinance
@@ -20,7 +24,7 @@ from src.modules.execution import ExecutionEngine
 from src.modules.logger import get_logger
 from src.modules.price import storage
 from src.modules.price.pipeline import PricePipeline
-from src.modules.schedules import Scheduler
+from src.modules.schedules import Scheduler, market_hours
 from src.modules.signal.sources import ExternalSignal, SignalSourceRegistry
 from src.modules.strategy.context import PositionView, StrategyContext, StrategyDecision
 from src.modules.strategy.loader import LoadedStrategy
@@ -76,14 +80,39 @@ class TradingRuntime:
         """Enabled watchlist tickers set (Settings > Price > Watchlist) to this
         intraday granularity — "1m" (green chip) or "1h" (blue chip, the default).
         Independent of the always-on daily ("1d") fetch every watchlist ticker gets
-        via ._watchlist() above regardless of this per-ticker choice."""
+        via ._watchlist() above regardless of this per-ticker choice. When
+        ``schedule.market_hours_enabled`` is on (the default), a ticker whose
+        region's market is currently closed (see market_hours.is_open) is skipped
+        until its session reopens."""
         async with self.ctx.db.session() as session:
             rows = await PriceWatchlistRepository(session).list_enabled()
-        return [r.ticker for r in rows if r.poll_interval == poll_interval]
+        gate_enabled = self.ctx.settings.schedule.market_hours_enabled
+        return [
+            r.ticker
+            for r in rows
+            if r.poll_interval == poll_interval and (not gate_enabled or market_hours.is_open(r.region))
+        ]
 
-    async def _mark_fetched(self, ticker: str, interval: str, _rows: int) -> None:
+    async def _mark_fetched(self, ticker: str, interval: str, rows: int, duration: float) -> None:
         async with self.ctx.db.transaction() as session:
             await PriceFetchLogRepository(session).mark_fetched(ticker, interval)
+            await PriceFetchAttemptRepository(session).record(
+                ticker=ticker,
+                interval=interval,
+                status="success",
+                duration_seconds=duration,
+                rows_fetched=rows,
+            )
+
+    async def _mark_fetch_error(self, ticker: str, interval: str, message: str, duration: float) -> None:
+        async with self.ctx.db.transaction() as session:
+            await PriceFetchAttemptRepository(session).record(
+                ticker=ticker,
+                interval=interval,
+                status="error",
+                duration_seconds=duration,
+                error_message=message,
+            )
 
     def _pipeline(self) -> PricePipeline:
         return PricePipeline(
@@ -92,6 +121,7 @@ class TradingRuntime:
             watchlist_provider=self._watchlist,
             bus=self.ctx.bus,
             on_fetched=self._mark_fetched,
+            on_error=self._mark_fetch_error,
         )
 
     def _intraday_pipeline(self, poll_interval: str) -> PricePipeline:
@@ -105,6 +135,7 @@ class TradingRuntime:
             watchlist_provider=lambda: self._watchlist_by_poll_interval(poll_interval),
             bus=self.ctx.bus,
             on_fetched=self._mark_fetched,
+            on_error=self._mark_fetch_error,
         )
 
     async def run_strategies(self) -> None:
@@ -129,7 +160,17 @@ class TradingRuntime:
                 if u.role == Role.trader.value and u.is_active
             ]
             watchlist = await PriceWatchlistRepository(session).list_enabled()
+            region_by_ticker = {
+                r.ticker: r.region for r in await PriceWatchlistRepository(session).list_all()
+            }
             strat_service = self.ctx.strategy_service(session)
+
+        market_hours_enabled = self.ctx.settings.schedule.market_hours_enabled
+
+        def _region_open(ticker: str) -> bool:
+            if not market_hours_enabled:
+                return True
+            return market_hours.is_open(region_by_ticker.get(ticker, market_hours.US))
 
         _logger.debug(
             "run_strategies: %d trader(s), %d enabled watchlist ticker(s): %s",
@@ -145,6 +186,10 @@ class TradingRuntime:
             )
 
         storage_path = self.ctx.settings.price.storage_path
+        # Loaded once per run, not per (user, ticker) — a strategy that wants
+        # market-regime context (see src/modules/price/regime.py) reads this via
+        # StrategyContext.benchmark_data rather than fetching it itself.
+        benchmark_data = storage.read_bars(storage_path, self.ctx.settings.price.benchmark_ticker, "1d")
         for user in users:
             try:
                 values = await self._config(user.id, "equity")
@@ -166,6 +211,12 @@ class TradingRuntime:
                 async with self.ctx.db.session() as session:
                     positions = await PositionRepository(session).list_open(user.id)
                 for position in positions:
+                    if not _region_open(position.ticker):
+                        _logger.debug(
+                            "run_strategies: %s's market is currently closed — skipping sell eval",
+                            position.ticker,
+                        )
+                        continue
                     df = storage.read_bars(storage_path, position.ticker, "1d")
                     if df is None or df.empty:
                         _logger.debug(
@@ -175,12 +226,18 @@ class TradingRuntime:
                         )
                         continue
                     try:
-                        await self._evaluate_sell(user.id, position, df, values, sell)
+                        await self._evaluate_sell(user.id, position, df, values, sell, benchmark_data)
                     except Exception as exc:  # noqa: BLE001
                         _logger.warning("sell strategy eval failed %s/%s: %s", user.id, position.ticker, exc)
 
             if buy is not None:
                 for item in watchlist:
+                    if not _region_open(item.ticker):
+                        _logger.debug(
+                            "run_strategies: %s's market is currently closed — skipping buy eval",
+                            item.ticker,
+                        )
+                        continue
                     df = storage.read_bars(storage_path, item.ticker, "1d")
                     if df is None or df.empty:
                         _logger.debug(
@@ -189,7 +246,7 @@ class TradingRuntime:
                         )
                         continue
                     try:
-                        await self._evaluate_buy(user.id, item, df, values, buy)
+                        await self._evaluate_buy(user.id, item, df, values, buy, benchmark_data)
                     except Exception as exc:  # noqa: BLE001
                         _logger.warning("buy strategy eval failed %s/%s: %s", user.id, item.ticker, exc)
 
@@ -211,7 +268,9 @@ class TradingRuntime:
             _logger.warning("external signal fetch failed for %s/%s: %s", user_id, ticker, exc)
             return []
 
-    async def _evaluate_sell(self, user_id: int, position, df, values, sell: LoadedStrategy) -> None:
+    async def _evaluate_sell(
+        self, user_id: int, position, df, values, sell: LoadedStrategy, benchmark_data=None
+    ) -> None:
         external = await self._external_signals(user_id, position.ticker, sell.external_sources)
         sell_decision = await sell.run(
             StrategyContext(
@@ -220,8 +279,15 @@ class TradingRuntime:
                 asset_class=position.asset_class,
                 config=values,
                 price_data=df,
-                position=PositionView(position.ticker, position.quantity, position.avg_price),
+                position=PositionView(
+                    position.ticker,
+                    position.quantity,
+                    position.avg_price,
+                    tier1_taken=position.profit_tier1_taken,
+                    tier2_taken=position.profit_tier2_taken,
+                ),
                 external_signals=external,
+                benchmark_data=benchmark_data,
             )
         )
         await self._record_decision(user_id, position, sell.name, "sell", sell_decision)
@@ -229,7 +295,9 @@ class TradingRuntime:
             _logger.debug("run_strategies: %s sell signal for %s", sell.name, position.ticker)
             await self.ctx.bus.publish(sell_decision.event)
 
-    async def _evaluate_buy(self, user_id: int, item, df, values, buy: LoadedStrategy) -> None:
+    async def _evaluate_buy(
+        self, user_id: int, item, df, values, buy: LoadedStrategy, benchmark_data=None
+    ) -> None:
         external = await self._external_signals(user_id, item.ticker, buy.external_sources)
         buy_decision = await buy.run(
             StrategyContext(
@@ -239,6 +307,7 @@ class TradingRuntime:
                 config=values,
                 price_data=df,
                 external_signals=external,
+                benchmark_data=benchmark_data,
             )
         )
         await self._record_decision(user_id, item, buy.name, "buy", buy_decision)

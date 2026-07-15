@@ -8,9 +8,11 @@ import { Backtesting } from "./pages/Backtesting";
 import { Dashboard } from "./pages/Dashboard";
 import { Jobs } from "./pages/Jobs";
 import { Login } from "./pages/Login";
+import { ManualTrade } from "./pages/ManualTrade";
 import { Orders } from "./pages/Orders";
 import { Positions } from "./pages/Positions";
 import { Prices } from "./pages/Prices";
+import { Reports } from "./pages/Reports";
 import { Settings } from "./pages/Settings";
 import { StrategyDetail } from "./pages/StrategyDetail";
 import { Users } from "./pages/Users";
@@ -63,6 +65,14 @@ export function App() {
             }
           />
           <Route
+            path="manual-trade"
+            element={
+              <RequirePermission role={role} permission="trade">
+                <ManualTrade />
+              </RequirePermission>
+            }
+          />
+          <Route
             path="prices"
             element={
               <RequirePermission role={role} permission="view_trading">
@@ -92,6 +102,14 @@ export function App() {
             element={
               <RequirePermission role={role} permission="manage_users">
                 <Users />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="reports"
+            element={
+              <RequirePermission role={role} permission="manage_users">
+                <Reports />
               </RequirePermission>
             }
           />

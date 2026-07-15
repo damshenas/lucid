@@ -9,6 +9,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from src.modules.com._retry import with_retry
 from src.modules.com.barchart import BarchartConnector
 from src.modules.com.claude import ClaudeClient, DisabledConnectorError
 from src.modules.com.finviz import FinvizConnector
@@ -46,6 +47,88 @@ async def test_other_connectors_shape() -> None:
 
     for c in (finviz, barchart, tv):
         await c.aclose()
+
+
+async def test_with_retry_succeeds_after_transient_failures() -> None:
+    calls = 0
+
+    async def flaky() -> str:
+        nonlocal calls
+        calls += 1
+        if calls < 3:
+            raise ValueError("transient")
+        return "ok"
+
+    result = await with_retry(
+        flaky, retry_attempts=3, backoff_base=0.001, retryable_exceptions=(ValueError,)
+    )
+    assert result == "ok"
+    assert calls == 3
+
+
+async def test_with_retry_raises_after_exhausting_attempts() -> None:
+    async def always_fails() -> str:
+        raise ValueError("nope")
+
+    with pytest.raises(ValueError):
+        await with_retry(
+            always_fails, retry_attempts=2, backoff_base=0.001, retryable_exceptions=(ValueError,)
+        )
+
+
+async def test_with_retry_does_not_retry_non_retryable_exceptions() -> None:
+    calls = 0
+
+    async def raises_type_error() -> str:
+        nonlocal calls
+        calls += 1
+        raise TypeError("not retryable")
+
+    with pytest.raises(TypeError):
+        await with_retry(
+            raises_type_error, retry_attempts=3, backoff_base=0.001, retryable_exceptions=(ValueError,)
+        )
+    assert calls == 1
+
+
+async def test_zacks_retries_on_429_then_succeeds() -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(429, json={})
+        return httpx.Response(200, json={"rank": 2, "name": "Buy"})
+
+    connector = ZacksConnector(
+        "https://provider.test",
+        client=httpx.AsyncClient(
+            base_url="https://provider.test",
+            transport=httpx.MockTransport(handler),
+        ),
+    )
+    connector._provider._backoff_base = 0.001  # keep the test fast
+    result = await connector.fetch_rank("AAPL")
+    assert result["rank"] == 2
+    assert calls == 2
+    await connector.aclose()
+
+
+async def test_zacks_does_not_retry_on_404() -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(404, json={})
+
+    connector = ZacksConnector("https://provider.test", client=_client(handler))
+    connector._provider._backoff_base = 0.001
+    with pytest.raises(httpx.HTTPStatusError):
+        await connector.fetch_rank("AAPL")
+    assert calls == 1
+    await connector.aclose()
 
 
 async def test_disabled_placeholders() -> None:

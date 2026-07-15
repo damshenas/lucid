@@ -1,4 +1,4 @@
-export type Role = "admin" | "trader" | "viewer";
+export type Role = "admin" | "trader" | "analyst";
 
 export type Permission =
   | "trade"
@@ -23,7 +23,7 @@ const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     "edit_own_strategies",
     "change_password",
   ],
-  viewer: ["view_trading", "change_password"],
+  analyst: ["view_trading", "edit_own_strategies", "change_password"],
 };
 
 export function hasPermission(role: Role | null | undefined, permission: Permission): boolean {

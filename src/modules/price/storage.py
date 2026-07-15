@@ -45,3 +45,14 @@ def list_tickers(storage_path: str | Path, interval: str = "1d") -> list[str]:
     if not directory.is_dir():
         return []
     return sorted(p.stem for p in directory.glob("*.parquet"))
+
+
+def list_intervals(storage_path: str | Path) -> list[str]:
+    """Every interval subdirectory that has ever been written to (e.g. "1d", "1h",
+    "1m") — used by the admin price-coverage report (GET
+    /api/v1/admin/reports/price-coverage) to discover what to scan without a fixed,
+    hardcoded interval list."""
+    root = Path(storage_path)
+    if not root.is_dir():
+        return []
+    return sorted(p.name for p in root.iterdir() if p.is_dir())

@@ -19,7 +19,7 @@ from .decision import StrategyDecisionLog
 from .log import AppLog
 from .order import Order
 from .position import Position
-from .price import PriceFetchLog, PriceWatchlist
+from .price import PriceFetchAttempt, PriceFetchLog, PriceWatchlist
 from .signal import Signal, SignalOutcome
 from .strategy import StrategyRegistry
 from .user import User
@@ -35,6 +35,7 @@ __all__ = [
     "OrderStatus",
     "Position",
     "PositionStatus",
+    "PriceFetchAttempt",
     "PriceFetchLog",
     "PriceWatchlist",
     "Role",

@@ -1,7 +1,9 @@
 """Yahoo Finance data connector (yfinance wrapper).
 
 Returns a normalized OHLCV frame with lowercase columns and a DatetimeIndex. The
-blocking yfinance call runs in a worker thread.
+blocking yfinance call runs in a worker thread, retried with exponential backoff (see
+``src/modules/com/_retry.py``) since yfinance raises plain exceptions on transient
+HTTP/network failures with no distinct "retryable" status of its own.
 """
 
 from __future__ import annotations
@@ -9,6 +11,8 @@ from __future__ import annotations
 import asyncio
 
 import pandas as pd
+
+from .._retry import DEFAULT_BACKOFF_BASE, DEFAULT_RETRY_ATTEMPTS, with_retry
 
 REQUIRED_CONFIG: list[str] = []
 OPTIONAL_CONFIG = {"auto_adjust": True}
@@ -29,7 +33,13 @@ def _normalize(df: pd.DataFrame) -> pd.DataFrame:
 
 
 async def fetch_ohlcv(
-    ticker: str, *, period: str = "1y", interval: str = "1d", auto_adjust: bool = True
+    ticker: str,
+    *,
+    period: str = "1y",
+    interval: str = "1d",
+    auto_adjust: bool = True,
+    retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
+    backoff_base: float = DEFAULT_BACKOFF_BASE,
 ) -> pd.DataFrame:
     import yfinance as yf
 
@@ -42,8 +52,16 @@ async def fetch_ohlcv(
             progress=False,
         )
 
-    raw = await asyncio.to_thread(_download)
-    return _normalize(raw)
+    async def _attempt() -> pd.DataFrame:
+        raw = await asyncio.to_thread(_download)
+        return _normalize(raw)
+
+    return await with_retry(
+        _attempt,
+        retry_attempts=retry_attempts,
+        backoff_base=backoff_base,
+        retryable_exceptions=(Exception,),
+    )
 
 
 __all__ = ["OPTIONAL_CONFIG", "REQUIRED_CONFIG", "fetch_ohlcv"]

@@ -50,9 +50,10 @@ def can_write_key(role: str, key: str) -> bool:
 
     Per plan.md's RBAC table, admin manages "system defaults" — every section,
     written globally (``user_id=None``; see ``save_values`` in api/v1/settings.py) so
-    the change applies to everyone. A trader may *additionally* override their own
-    personal ``strategy.*`` choice (scoped to their own ``user_id``) without needing
-    ``edit_system_settings``. Viewers can write nothing.
+    the change applies to everyone. A trader or analyst may *additionally* override
+    their own personal ``strategy.*`` choice (scoped to their own ``user_id``)
+    without needing ``edit_system_settings``, since both roles carry
+    ``edit_own_strategies``.
     """
     if has_permission(role, Permission.edit_system_settings):
         return True

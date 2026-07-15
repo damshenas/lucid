@@ -84,6 +84,10 @@ export interface WatchlistItem {
    * "1m" (green chip) or "1h" (blue chip, the default). Independent of the always-on
    * daily fetch every watchlist ticker gets regardless of this value. */
   poll_interval: "1m" | "1h";
+  /** Which market-hours window (Settings > Price > Watchlist region chip) gates this
+   * ticker's intraday fetch + strategy evaluation when market-hours gating is on —
+   * "us" (default), "eu", or "em". Does not affect the always-on daily fetch. */
+  region: "us" | "eu" | "em";
   has_bars: boolean;
   /** False for a ticker surfaced only because it has stored price bars on disk
    * (e.g. an ad-hoc backfill) but was never actually added to the watchlist — it
@@ -117,6 +121,24 @@ export interface Job {
 export interface GitSyncResult {
   commit: string;
   deployed: string[];
+}
+
+export interface PriceCoverageRow {
+  ticker: string;
+  interval: string;
+  earliest: string;
+  latest: string;
+  bar_count: number;
+}
+
+export interface FetchActivityRow {
+  ticker: string;
+  interval: string;
+  attempted_at: string | null;
+  status: string;
+  error_message: string | null;
+  duration_seconds: number;
+  rows_fetched: number;
 }
 
 export interface CredentialCatalogItem {

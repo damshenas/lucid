@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from src.modules.broker import PaperBroker
 from src.modules.bus import BuySignalEvent, EventBus, OrderRejectedEvent, SellSignalEvent
 from src.modules.db.connection import Database
@@ -12,7 +14,7 @@ from src.modules.db.repositories.order import OrderRepository
 from src.modules.db.repositories.position import PositionRepository
 from src.modules.db.repositories.signal import SignalRepository
 from src.modules.db.repositories.user import UserRepository
-from src.modules.execution import ExecutionEngine
+from src.modules.execution import ExecutionEngine, ManualOrderError
 
 
 async def _make_user(db: Database) -> int:
@@ -198,3 +200,126 @@ async def test_sell_without_position_records_blocked_signal(db: Database) -> Non
     assert len(signals) == 1
     assert signals[0].status == "blocked"
     assert "no open position" in signals[0].reasoning
+
+
+async def test_manual_buy_opens_position_and_records_manual_signal(db: Database) -> None:
+    uid = await _make_user(db)
+    broker = PaperBroker()
+    broker.set_price("AAPL", 100.0)
+    engine = _engine(db, broker)
+
+    order = await engine.place_manual_order(
+        user_id=uid, ticker="AAPL", side="buy", quantity=3.0, asset_class="equity"
+    )
+    assert order["side"] == "buy"
+    assert order["quantity"] == 3.0
+    assert order["status"] == "filled"
+
+    async with db.session() as s:
+        positions = await PositionRepository(s).list_open(uid)
+        signals = await SignalRepository(s).list_by_user(uid)
+    assert len(positions) == 1 and positions[0].quantity == 3.0
+    assert len(signals) == 1
+    assert signals[0].source == "manual"
+    assert signals[0].status == "acted"
+
+
+async def test_manual_buy_increases_existing_position_with_weighted_avg(db: Database) -> None:
+    uid = await _make_user(db)
+    broker = PaperBroker()
+    broker.set_price("AAPL", 100.0)
+    engine = _engine(db, broker)
+
+    await engine.place_manual_order(user_id=uid, ticker="AAPL", side="buy", quantity=10.0)
+    broker.set_price("AAPL", 200.0)
+    await engine.place_manual_order(user_id=uid, ticker="AAPL", side="buy", quantity=10.0)
+
+    async with db.session() as s:
+        positions = await PositionRepository(s).list_open(uid)
+    assert len(positions) == 1
+    assert positions[0].quantity == 20.0
+    assert positions[0].avg_price == 150.0
+
+
+async def test_manual_sell_without_position_raises(db: Database) -> None:
+    uid = await _make_user(db)
+    broker = PaperBroker()
+    engine = _engine(db, broker)
+
+    with pytest.raises(ManualOrderError, match="no open position"):
+        await engine.place_manual_order(user_id=uid, ticker="TSLA", side="sell", quantity=1.0)
+
+
+async def test_manual_sell_more_than_held_raises(db: Database) -> None:
+    uid = await _make_user(db)
+    broker = PaperBroker()
+    broker.set_price("AAPL", 100.0)
+    engine = _engine(db, broker)
+
+    await engine.place_manual_order(user_id=uid, ticker="AAPL", side="buy", quantity=5.0)
+
+    with pytest.raises(ManualOrderError, match="only 5.0 held"):
+        await engine.place_manual_order(user_id=uid, ticker="AAPL", side="sell", quantity=10.0)
+
+
+async def test_manual_sell_partial_reduces_position(db: Database) -> None:
+    uid = await _make_user(db)
+    broker = PaperBroker()
+    broker.set_price("AAPL", 100.0)
+    engine = _engine(db, broker)
+
+    await engine.place_manual_order(user_id=uid, ticker="AAPL", side="buy", quantity=10.0)
+    await engine.place_manual_order(user_id=uid, ticker="AAPL", side="sell", quantity=4.0)
+
+    async with db.session() as s:
+        positions = await PositionRepository(s).list_open(uid)
+        orders = await OrderRepository(s).list_by_user(uid)
+    assert len(positions) == 1 and positions[0].quantity == 6.0
+    assert len([o for o in orders if o.side == "sell"]) == 1
+
+
+async def test_manual_and_strategy_orders_share_the_same_ticker_lock(db: Database) -> None:
+    uid = await _make_user(db)
+    broker = PaperBroker()
+    broker.set_price("AAPL", 100.0)
+    engine = _engine(db, broker)
+
+    await asyncio.gather(
+        engine.place_manual_order(user_id=uid, ticker="AAPL", side="buy", quantity=5.0),
+        engine.handle_buy(BuySignalEvent(ticker="AAPL", user_id=uid, source="trend_follow")),
+    )
+
+    async with db.session() as s:
+        positions = await PositionRepository(s).list_open(uid)
+    # Only one of the two buys should have won (an open position already existed for
+    # whichever ran second), never a duplicate/racing position row.
+    assert len(positions) == 1
+
+
+async def test_sell_with_profit_tier_marks_position_tier_taken(db: Database) -> None:
+    """Regression: SellSignalEvent.profit_tier must flip Position.profit_tier{N}_taken
+    so a tiered sell strategy (trailing_stop) never re-fires the same tier."""
+    uid = await _make_user(db)
+    broker = PaperBroker()
+    broker.set_price("AAPL", 100.0)
+    engine = _engine(db, broker)
+
+    await engine.handle_buy(BuySignalEvent(ticker="AAPL", user_id=uid, source="t"))
+    await engine.handle_sell(
+        SellSignalEvent(ticker="AAPL", user_id=uid, source="trailing_stop", quantity_pct=33.0, profit_tier=1)
+    )
+
+    async with db.session() as s:
+        positions = await PositionRepository(s).list_open(uid)
+    assert len(positions) == 1
+    assert positions[0].profit_tier1_taken is True
+    assert positions[0].profit_tier2_taken is False
+
+    await engine.handle_sell(
+        SellSignalEvent(ticker="AAPL", user_id=uid, source="trailing_stop", quantity_pct=33.0, profit_tier=2)
+    )
+    async with db.session() as s:
+        positions = await PositionRepository(s).list_open(uid)
+    assert positions[0].profit_tier1_taken is True
+    assert positions[0].profit_tier2_taken is True
+

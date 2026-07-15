@@ -56,7 +56,7 @@ scheduler.run_strategies (sell: per trader's open positions · buy: per watchlis
 | `db` | Engine/session, ORM models live in `src/db/models` via `modules/db` |
 | `encryption` | AES-256-GCM secrets + credential cascade |
 | `authentication` | JWT tokens, password hashing, first-run admin |
-| `authorization` | RBAC: admin / trader / viewer |
+| `authorization` | RBAC: admin / trader / analyst |
 | `broker` | Abstract broker + registry + paper broker |
 | `execution` | Signal → order pipeline (no decisions) |
 | `price` | Pipelines, Parquet storage, indicators, regime |
@@ -98,3 +98,15 @@ schedule and no separate enable/disable setting. An admin triggers it any time v
 Sync); clicking it is itself the admin's consent. Either way,
 the app never runs code straight out of the image layer or the staging mount — only
 out of the merged `STRATEGIES_ROOT`.
+
+## Deferred features (documented, not implemented)
+
+A couple of features were deliberately designed but not built, per an explicit
+product decision to document the design for a later call rather than build them now:
+
+- [Risk gate design](risk-gate-design.md) — a pre-trade Guardian-style limit gate
+  (single-trade cap, daily-buy cap, max open positions, drawdown halt). Today there is
+  **no automated risk enforcement at all** on any order.
+- [Daily P&L design](daily-pnl-design.md) — a daily realized-P&L aggregate table and
+  dashboard equity/P&L chart. Today the Dashboard has no aggregate chart.
+

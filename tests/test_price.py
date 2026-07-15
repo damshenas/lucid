@@ -80,13 +80,17 @@ async def test_price_watchlist_repository_crud(session: AsyncSession) -> None:
     assert row.ticker == "AMZN"  # normalized to upper case
     assert row.enabled is True
     assert row.poll_interval == "1h"  # default
+    assert row.region == "us"  # default
     assert [r.ticker for r in await repo.list_enabled()] == ["AMZN"]
 
     # upsert again updates the existing row rather than creating a duplicate
-    updated = await repo.upsert("amzn", asset_class="crypto", enabled=False, poll_interval="1m")
+    updated = await repo.upsert(
+        "amzn", asset_class="crypto", enabled=False, poll_interval="1m", region="eu"
+    )
     assert updated.id == row.id
     assert updated.asset_class == "crypto"
     assert updated.poll_interval == "1m"
+    assert updated.region == "eu"
     assert await repo.list_enabled() == []
 
     toggled = await repo.set_enabled("AMZN", True)
@@ -98,6 +102,11 @@ async def test_price_watchlist_repository_crud(session: AsyncSession) -> None:
     assert interval_updated.poll_interval == "1h"
     assert await repo.set_poll_interval("NOPE", "1h") is None
     assert await repo.set_enabled("NOPE", True) is None
+
+    region_updated = await repo.set_region("AMZN", "em")
+    assert region_updated is not None
+    assert region_updated.region == "em"
+    assert await repo.set_region("NOPE", "us") is None
 
     assert await repo.delete_by_ticker("AMZN") is True
     assert await repo.delete_by_ticker("AMZN") is False
@@ -115,7 +124,7 @@ async def test_pipeline_run_daily(tmp_path) -> None:
 
     fetched: list[tuple[str, str, int]] = []
 
-    async def on_fetched(ticker: str, interval: str, rows: int) -> None:
+    async def on_fetched(ticker: str, interval: str, rows: int, duration: float) -> None:
         fetched.append((ticker, interval, rows))
 
     pipeline = PricePipeline(
@@ -128,6 +137,35 @@ async def test_pipeline_run_daily(tmp_path) -> None:
     assert results == {"AAPL": 20, "MSFT": 20}
     assert len(fetched) == 2
     assert storage.read_bars(tmp_path, "AAPL", "1d") is not None
+
+
+async def test_pipeline_run_daily_calls_on_error_for_failed_ticker(tmp_path) -> None:
+    df = _uptrend_df(20)
+
+    async def fetcher(ticker: str, *, period: str, interval: str) -> pd.DataFrame:
+        if ticker == "BAD":
+            raise RuntimeError("provider down")
+        return df
+
+    async def watchlist() -> list[str]:
+        return ["AAPL", "BAD"]
+
+    errors: list[tuple[str, str, str]] = []
+
+    async def on_error(ticker: str, interval: str, message: str, duration: float) -> None:
+        errors.append((ticker, interval, message))
+
+    pipeline = PricePipeline(
+        storage_path=str(tmp_path),
+        fetcher=fetcher,
+        watchlist_provider=watchlist,
+        on_error=on_error,
+    )
+    results = await pipeline.run_daily()
+    assert results == {"AAPL": 20, "BAD": 0}
+    assert len(errors) == 1
+    assert errors[0][0] == "BAD"
+    assert "provider down" in errors[0][2]
 
 
 def test_migrate_legacy_prices_normalizes_columns_and_case(tmp_path) -> None:

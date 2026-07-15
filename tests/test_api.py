@@ -109,17 +109,17 @@ def test_settings_write_requires_permission(client: TestClient) -> None:
     created = client.post(
         "/api/v1/admin/users",
         headers=_auth(admin_token),
-        json={"username": "view1", "password": "viewerpw"},
+        json={"username": "analyst1", "password": "analystpw"},
     )
     assert created.status_code == 201
 
-    viewer_token = client.post(
-        "/api/v1/auth/login", json={"username": "view1", "password": "viewerpw"}
+    analyst_token = client.post(
+        "/api/v1/auth/login", json={"username": "analyst1", "password": "analystpw"}
     ).json()["access_token"]
 
     resp = client.post(
         "/api/v1/settings",
-        headers=_auth(viewer_token),
+        headers=_auth(analyst_token),
         json={"values": {"execution.fixed_usd": 50.0}},
     )
     assert resp.status_code == 403
@@ -168,6 +168,189 @@ def test_create_user_invalid_role_rejected(client: TestClient) -> None:
         json={"username": "bob", "password": "somepassword", "role": "superadmin"},
     )
     assert resp.status_code == 422
+
+
+def test_admin_user_crud(client: TestClient) -> None:
+    admin_token = client.post(
+        "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
+    ).json()["access_token"]
+    created = client.post(
+        "/api/v1/admin/users",
+        headers=_auth(admin_token),
+        json={"username": "bob", "password": "somepassword", "role": "analyst"},
+    ).json()
+    user_id = created["id"]
+
+    # edit role
+    resp = client.patch(
+        f"/api/v1/admin/users/{user_id}",
+        headers=_auth(admin_token),
+        json={"role": "trader"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["role"] == "trader"
+
+    # reset password forces must_change_password and lets the user log in with it
+    resp = client.post(
+        f"/api/v1/admin/users/{user_id}/reset-password",
+        headers=_auth(admin_token),
+        json={"new_password": "brandnewpw1"},
+    )
+    assert resp.status_code == 200
+    login = client.post(
+        "/api/v1/auth/login", json={"username": "bob", "password": "brandnewpw1"}
+    )
+    assert login.status_code == 200
+    assert login.json()["must_change_password"] is True
+
+    # deactivate blocks login
+    resp = client.patch(
+        f"/api/v1/admin/users/{user_id}",
+        headers=_auth(admin_token),
+        json={"is_active": False},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["is_active"] is False
+    blocked = client.post(
+        "/api/v1/auth/login", json={"username": "bob", "password": "brandnewpw1"}
+    )
+    assert blocked.status_code == 401
+
+    # delete removes the row
+    resp = client.delete(f"/api/v1/admin/users/{user_id}", headers=_auth(admin_token))
+    assert resp.status_code == 204
+    remaining = client.get("/api/v1/admin/users", headers=_auth(admin_token)).json()
+    assert all(u["id"] != user_id for u in remaining)
+
+
+def test_admin_cannot_delete_or_deactivate_last_admin(client: TestClient) -> None:
+    setup = client.post(
+        "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
+    ).json()
+    admin_token = setup["access_token"]
+    admin_id = client.get("/api/v1/admin/users", headers=_auth(admin_token)).json()[0]["id"]
+
+    resp = client.delete(f"/api/v1/admin/users/{admin_id}", headers=_auth(admin_token))
+    assert resp.status_code == 409
+
+    resp = client.patch(
+        f"/api/v1/admin/users/{admin_id}",
+        headers=_auth(admin_token),
+        json={"is_active": False},
+    )
+    assert resp.status_code == 409
+
+
+def test_manual_order_trader_only(client: TestClient) -> None:
+    admin_token = client.post(
+        "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
+    ).json()["access_token"]
+    client.post(
+        "/api/v1/admin/users",
+        headers=_auth(admin_token),
+        json={"username": "trader1", "password": "traderpass", "role": "trader"},
+    )
+    client.post(
+        "/api/v1/admin/users",
+        headers=_auth(admin_token),
+        json={"username": "analyst1", "password": "analystpw", "role": "analyst"},
+    )
+    trader_token = client.post(
+        "/api/v1/auth/login", json={"username": "trader1", "password": "traderpass"}
+    ).json()["access_token"]
+    analyst_token = client.post(
+        "/api/v1/auth/login", json={"username": "analyst1", "password": "analystpw"}
+    ).json()["access_token"]
+
+    # analysts cannot place manual orders
+    resp = client.post(
+        "/api/v1/orders/manual",
+        headers=_auth(analyst_token),
+        json={"ticker": "AAPL", "side": "buy", "quantity": 2},
+    )
+    assert resp.status_code == 403
+
+    # trader can
+    resp = client.post(
+        "/api/v1/orders/manual",
+        headers=_auth(trader_token),
+        json={"ticker": "AAPL", "side": "buy", "quantity": 2},
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["ticker"] == "AAPL"
+    assert body["side"] == "buy"
+    assert body["quantity"] == 2
+
+    orders = client.get("/api/v1/orders", headers=_auth(trader_token)).json()
+    assert len(orders) == 1
+
+    # selling more than held is rejected with 400
+    resp = client.post(
+        "/api/v1/orders/manual",
+        headers=_auth(trader_token),
+        json={"ticker": "AAPL", "side": "sell", "quantity": 999},
+    )
+    assert resp.status_code == 400
+
+
+def test_admin_reports_permission_and_empty_state(client: TestClient) -> None:
+    admin_token = client.post(
+        "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
+    ).json()["access_token"]
+    client.post(
+        "/api/v1/admin/users",
+        headers=_auth(admin_token),
+        json={"username": "trader1", "password": "traderpass", "role": "trader"},
+    )
+    trader_token = client.post(
+        "/api/v1/auth/login", json={"username": "trader1", "password": "traderpass"}
+    ).json()["access_token"]
+
+    assert (
+        client.get(
+            "/api/v1/admin/reports/price-coverage", headers=_auth(trader_token)
+        ).status_code
+        == 403
+    )
+    assert (
+        client.get(
+            "/api/v1/admin/reports/fetch-activity", headers=_auth(trader_token)
+        ).status_code
+        == 403
+    )
+
+    coverage = client.get("/api/v1/admin/reports/price-coverage", headers=_auth(admin_token))
+    assert coverage.status_code == 200
+    assert coverage.json() == []
+
+    activity = client.get("/api/v1/admin/reports/fetch-activity", headers=_auth(admin_token))
+    assert activity.status_code == 200
+    assert activity.json() == []
+
+
+def test_admin_price_coverage_report_reflects_stored_bars(tmp_path) -> None:
+    ctx = AppContext.build(database_url="sqlite+aiosqlite:///:memory:")
+    ctx.settings.price.storage_path = str(tmp_path)
+    app = create_app(ctx)
+    with TestClient(app) as client:
+        admin_token = client.post(
+            "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
+        ).json()["access_token"]
+
+        df = pd.DataFrame(
+            {"open": [1.0, 1.1], "high": [1.0, 1.1], "low": [1.0, 1.1], "close": [1.0, 1.1], "volume": [1.0, 1.0]},
+            index=pd.to_datetime(["2024-01-01", "2024-01-02"]),
+        )
+        storage.write_bars(tmp_path, "AAPL", "1d", df)
+
+        resp = client.get("/api/v1/admin/reports/price-coverage", headers=_auth(admin_token))
+        assert resp.status_code == 200
+        rows = resp.json()
+        assert len(rows) == 1
+        assert rows[0]["ticker"] == "AAPL"
+        assert rows[0]["interval"] == "1d"
+        assert rows[0]["bar_count"] == 2
 
 
 def test_system_credentials_admin_only(client: TestClient) -> None:
@@ -277,7 +460,7 @@ def test_price_watchlist_crud(client: TestClient) -> None:
 
     assert client.get("/api/v1/prices/watchlist", headers=_auth(trader_token)).json() == []
 
-    # viewers/admins (no edit_own_strategies) cannot mutate the watchlist
+    # admins (no edit_own_strategies) cannot mutate the watchlist
     assert (
         client.post(
             "/api/v1/prices/watchlist",
@@ -298,6 +481,7 @@ def test_price_watchlist_crud(client: TestClient) -> None:
         "asset_class": "equity",
         "enabled": True,
         "poll_interval": "1h",  # default when not specified
+        "region": "us",  # default when not specified
     }
 
     listing = client.get("/api/v1/prices/watchlist", headers=_auth(trader_token)).json()
@@ -307,6 +491,7 @@ def test_price_watchlist_crud(client: TestClient) -> None:
             "asset_class": "equity",
             "enabled": True,
             "poll_interval": "1h",
+            "region": "us",
             "has_bars": False,
             "on_watchlist": True,
         }
@@ -329,6 +514,17 @@ def test_price_watchlist_crud(client: TestClient) -> None:
     assert disable.status_code == 200
     assert disable.json()["enabled"] is False
     assert disable.json()["poll_interval"] == "1m"  # untouched by an enabled-only patch
+
+    set_region = client.patch(
+        "/api/v1/prices/watchlist/AMZN", headers=_auth(trader_token), json={"region": "eu"}
+    )
+    assert set_region.status_code == 200
+    assert set_region.json()["region"] == "eu"
+
+    bad_region = client.patch(
+        "/api/v1/prices/watchlist/AMZN", headers=_auth(trader_token), json={"region": "apac"}
+    )
+    assert bad_region.status_code == 422
 
     missing = client.patch(
         "/api/v1/prices/watchlist/NOPE", headers=_auth(trader_token), json={"enabled": True}

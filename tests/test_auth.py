@@ -78,7 +78,7 @@ async def test_authenticate(session: AsyncSession) -> None:
 async def test_created_user_must_change_password(session: AsyncSession) -> None:
     svc = AuthService(session)
     await svc.bootstrap_first_admin("root", "pw")
-    user = await svc.create_user("viewer1", "pw", role="viewer")
+    user = await svc.create_user("analyst1", "pw", role="analyst")
     assert user.must_change_password is True
 
     updated = await svc.change_password(user, "newpw")
@@ -114,14 +114,15 @@ async def test_successful_login_resets_failed_attempts(session: AsyncSession) ->
 def test_rbac_matrix() -> None:
     assert can_trade("trader")
     assert not can_trade("admin")
-    assert not can_trade("viewer")
+    assert not can_trade("analyst")
 
     assert has_permission("admin", Permission.manage_users)
     assert not has_permission("trader", Permission.manage_users)
 
-    assert has_permission("viewer", Permission.change_password)
-    assert not has_permission("viewer", Permission.trade)
+    assert has_permission("analyst", Permission.change_password)
+    assert has_permission("analyst", Permission.edit_own_strategies)
+    assert not has_permission("analyst", Permission.trade)
 
     require_permission("trader", Permission.trade)
     with pytest.raises(PermissionDenied):
-        require_permission("viewer", Permission.trade)
+        require_permission("analyst", Permission.trade)

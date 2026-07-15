@@ -3,12 +3,14 @@ import type {
   BacktestResult,
   CredentialCatalogItem,
   Decision,
+  FetchActivityRow,
   GitSyncResult,
   Job,
   MyCredentials,
   Order,
   Position,
   PriceBars,
+  PriceCoverageRow,
   SettingsSchema,
   Signal,
   Strategy,
@@ -106,6 +108,11 @@ export const api = {
     ),
   orders: (limit = 50, offset = 0) =>
     request<Order[]>(`/api/v1/orders?limit=${limit}&offset=${offset}`),
+  placeManualOrder: (body: { ticker: string; side: "buy" | "sell"; quantity: number; asset_class: string }) =>
+    request<Order>("/api/v1/orders/manual", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   signals: (limit = 50, offset = 0, source?: string) =>
     request<Signal[]>(
       `/api/v1/signals?limit=${limit}&offset=${offset}${source ? `&source=${encodeURIComponent(source)}` : ""}`,
@@ -120,14 +127,24 @@ export const api = {
       body: JSON.stringify({ ticker, days }),
     }),
   watchlist: () => request<WatchlistItem[]>("/api/v1/prices/watchlist"),
-  addToWatchlist: (ticker: string, assetClass: string, pollInterval: "1m" | "1h" = "1h") =>
+  addToWatchlist: (
+    ticker: string,
+    assetClass: string,
+    pollInterval: "1m" | "1h" = "1h",
+    region: "us" | "eu" | "em" = "us",
+  ) =>
     request<WatchlistItem>("/api/v1/prices/watchlist", {
       method: "POST",
-      body: JSON.stringify({ ticker, asset_class: assetClass, poll_interval: pollInterval }),
+      body: JSON.stringify({
+        ticker,
+        asset_class: assetClass,
+        poll_interval: pollInterval,
+        region,
+      }),
     }),
   updateWatchlistItem: (
     ticker: string,
-    changes: { enabled?: boolean; poll_interval?: "1m" | "1h" },
+    changes: { enabled?: boolean; poll_interval?: "1m" | "1h"; region?: "us" | "eu" | "em" },
   ) =>
     request<WatchlistItem>(`/api/v1/prices/watchlist/${encodeURIComponent(ticker)}`, {
       method: "PATCH",
@@ -148,7 +165,23 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ username, password, role }),
     }),
+  updateAdminUser: (id: number, changes: { role?: string; is_active?: boolean }) =>
+    request<AdminUser>(`/api/v1/admin/users/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(changes),
+    }),
+  resetUserPassword: (id: number, newPassword: string) =>
+    request<{ ok: boolean }>(`/api/v1/admin/users/${id}/reset-password`, {
+      method: "POST",
+      body: JSON.stringify({ new_password: newPassword }),
+    }),
+  deleteAdminUser: (id: number) =>
+    request<void>(`/api/v1/admin/users/${id}`, { method: "DELETE" }),
   adminJobs: () => request<Job[]>("/api/v1/admin/jobs"),
+  priceCoverageReport: () =>
+    request<PriceCoverageRow[]>("/api/v1/admin/reports/price-coverage"),
+  fetchActivityReport: (days = 7) =>
+    request<FetchActivityRow[]>(`/api/v1/admin/reports/fetch-activity?days=${days}`),
   gitSync: () => request<GitSyncResult>("/api/v1/admin/git-sync", { method: "POST" }),
   changePassword: (newPassword: string) =>
     request<{ ok: boolean }>("/api/v1/auth/change-password", {

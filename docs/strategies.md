@@ -103,8 +103,12 @@ Import pure helpers directly:
 ```python
 from src.modules.price.indicators import rsi, macd, atr, bollinger, compute_snapshot
 from src.modules.price import regime
-regime.detect(benchmark_df)  # "bull" | "bear" | "neutral"
+regime.detect(context.benchmark_data)  # "bull" | "bear" | "neutral"
 ```
+
+`context.benchmark_data` is daily OHLCV for the configured benchmark ticker
+(`price.benchmark_ticker`, default `SPY`), loaded once per evaluation pass. The
+built-in `trailing_stop` sell strategy consumes it (wider ATR stop in a bear regime).
 
 ## Activation
 

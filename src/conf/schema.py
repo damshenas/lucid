@@ -53,6 +53,11 @@ class ScheduleConfig(BaseModel):
     poll_positions_seconds: int = 300
     daily_price_hour: int = 22
     intraday_price_minutes: int = 15
+    # Gates intraday price-fetch jobs and strategy evaluation (run_strategies) by each
+    # ticker's watchlist region (see PriceWatchlist.region,
+    # src/modules/schedules/market_hours.py) — a closed-market ticker is skipped
+    # until its region's session opens. Does not affect the daily ("1d") fetch.
+    market_hours_enabled: bool = True
     # Strategy files are (re)scanned at startup and via the manual "Rescan" button
     # (POST /api/v1/strategies/scan) only — no periodic auto-scan.
 

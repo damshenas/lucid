@@ -30,7 +30,7 @@ class TimestampMixin:
 class Role(str, Enum):
     admin = "admin"
     trader = "trader"
-    viewer = "viewer"
+    analyst = "analyst"
 
 
 class Direction(str, Enum):

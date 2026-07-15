@@ -37,3 +37,11 @@ class PositionRepository(BaseRepository[Position]):
         stmt = select(Position).where(Position.status == PositionStatus.open.value)
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
+
+    async def mark_tier_taken(self, position: Position, tier: int) -> Position:
+        """Flip ``profit_tier{tier}_taken`` so a tiered sell strategy (e.g.
+        trailing_stop) never re-fires the same profit-take tier again for this
+        position. ``tier`` must be 1 or 2."""
+        if tier not in (1, 2):
+            raise ValueError(f"invalid profit tier {tier!r}; must be 1 or 2")
+        return await self.update(position, **{f"profit_tier{tier}_taken": True})

@@ -8,7 +8,7 @@ from .credential import CredentialRepository
 from .decision import StrategyDecisionRepository
 from .order import OrderRepository
 from .position import PositionRepository
-from .price import PriceFetchLogRepository, PriceWatchlistRepository
+from .price import PriceFetchAttemptRepository, PriceFetchLogRepository, PriceWatchlistRepository
 from .signal import SignalOutcomeRepository, SignalRepository
 from .strategy import StrategyRepository
 from .user import UserRepository
@@ -19,6 +19,7 @@ __all__ = [
     "CredentialRepository",
     "OrderRepository",
     "PositionRepository",
+    "PriceFetchAttemptRepository",
     "PriceFetchLogRepository",
     "PriceWatchlistRepository",
     "SignalOutcomeRepository",

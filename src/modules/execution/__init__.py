@@ -16,6 +16,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any
 
+from src.conf.schema import AssetClass
 from src.modules.broker.base import Broker
 from src.modules.bus import (
     BuySignalEvent,
@@ -40,6 +41,10 @@ QuoteProvider = Callable[[str], Awaitable[float] | float]
 ConfigProvider = Callable[[int, str | None], Awaitable[dict[str, Any]] | dict[str, Any]]
 
 _logger = get_logger("execution")
+
+
+class ManualOrderError(Exception):
+    """Raised when a manual order can't be placed (rejected/insufficient position/etc.)."""
 
 
 async def _maybe_await(value: Any) -> Any:
@@ -242,6 +247,9 @@ class ExecutionEngine:
                     else:
                         await positions.update(position, quantity=remaining)
 
+                    if event.profit_tier is not None:
+                        await positions.mark_tier_taken(position, event.profit_tier)
+
                     await orders.create(
                         user_id=event.user_id,
                         ticker=event.ticker,
@@ -273,5 +281,145 @@ class ExecutionEngine:
                 )
             )
 
+    async def place_manual_order(
+        self,
+        *,
+        user_id: int,
+        ticker: str,
+        side: str,
+        quantity: float,
+        asset_class: str = AssetClass.equity.value,
+    ) -> dict[str, Any]:
+        """User-initiated buy/sell for an exact ``quantity`` (no auto-sizing, no
+        dedup window — this is an explicit one-off action, not a strategy signal).
+        Reuses the same per-``(user_id, ticker)`` lock and broker resolution as
+        ``handle_buy``/``handle_sell``, and records a ``Signal`` with
+        ``source="manual"`` so it shows up in the same audit trail."""
+        if side not in (OrderSide.buy.value, OrderSide.sell.value):
+            raise ManualOrderError(f"invalid side '{side}'")
+        if quantity <= 0:
+            raise ManualOrderError("quantity must be positive")
 
-__all__ = ["ExecutionEngine"]
+        async with self._lock(user_id, ticker):
+            async with self._db.transaction() as session:
+                signal = await SignalService(session).store(
+                    user_id=user_id,
+                    ticker=ticker,
+                    direction=side,
+                    source="manual",
+                    asset_class=asset_class,
+                    reasoning="manual order placed by user",
+                )
+                signal_id = signal.id
+
+            try:
+                async with self._db.transaction() as session:
+                    positions = PositionRepository(session)
+                    orders = OrderRepository(session)
+                    signal_service = SignalService(session)
+                    signal = await SignalRepository(session).get_by_id(signal_id)
+
+                    position = await positions.get_open_by_ticker(user_id, ticker)
+
+                    if side == OrderSide.sell.value:
+                        if position is None or position.quantity <= 0:
+                            await signal_service.mark_blocked(signal, reason="no open position to sell")
+                            raise ManualOrderError("no open position to sell")
+                        if quantity > position.quantity + 1e-9:
+                            await signal_service.mark_blocked(
+                                signal, reason="quantity exceeds position size"
+                            )
+                            raise ManualOrderError(
+                                f"cannot sell {quantity}; only {position.quantity} held"
+                            )
+
+                    broker = await _maybe_await(self._resolve_broker(user_id, asset_class))
+                    broker_qty = quantity if side == OrderSide.buy.value else -quantity
+                    result = await broker.place_market_order(ticker, broker_qty, asset_class=asset_class)
+                    if result.status == OrderStatus.rejected.value:
+                        reason = result.reason or "broker rejected"
+                        await signal_service.mark_blocked(signal, reason=reason)
+                        raise ManualOrderError(reason)
+
+                    fill_price = result.avg_price
+                    if fill_price is None:
+                        fill_price = float(await _maybe_await(self._quote(ticker)))
+                    now = datetime.now(timezone.utc)
+
+                    if side == OrderSide.buy.value:
+                        if position is None:
+                            position = await positions.create(
+                                user_id=user_id,
+                                ticker=ticker,
+                                asset_class=asset_class,
+                                quantity=quantity,
+                                avg_price=fill_price,
+                                status=PositionStatus.open.value,
+                                opened_at=now,
+                            )
+                        else:
+                            total_qty = position.quantity + quantity
+                            new_avg = (
+                                position.avg_price * position.quantity + fill_price * quantity
+                            ) / total_qty
+                            position = await positions.update(
+                                position, quantity=total_qty, avg_price=new_avg
+                            )
+                    else:
+                        remaining = position.quantity - quantity
+                        if remaining <= 1e-9:
+                            position = await positions.update(
+                                position,
+                                quantity=0.0,
+                                status=PositionStatus.closed.value,
+                                closed_at=now,
+                            )
+                        else:
+                            position = await positions.update(position, quantity=remaining)
+
+                    order = await orders.create(
+                        user_id=user_id,
+                        ticker=ticker,
+                        side=side,
+                        quantity=quantity,
+                        price=fill_price,
+                        status=OrderStatus.filled.value,
+                        broker_order_id=result.broker_order_id,
+                        position_id=position.id,
+                        paper=result.paper,
+                    )
+                    await signal_service.mark_acted(signal)
+            except ManualOrderError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - always leave a trace on the signal
+                _logger.error(
+                    "place_manual_order failed for user %s/%s: %s", user_id, ticker, exc
+                )
+                async with self._db.transaction() as session:
+                    failed = await SignalRepository(session).get_by_id(signal_id)
+                    if failed is not None and failed.status == SignalStatus.new.value:
+                        await SignalService(session).mark_blocked(failed, reason=str(exc))
+                raise ManualOrderError(str(exc)) from exc
+
+        await self._publish(
+            OrderFilledEvent(
+                user_id=user_id,
+                ticker=ticker,
+                side=side,
+                quantity=quantity,
+                price=fill_price,
+                paper=result.paper,
+            )
+        )
+        return {
+            "id": order.id,
+            "ticker": order.ticker,
+            "side": order.side,
+            "quantity": order.quantity,
+            "price": order.price,
+            "status": order.status,
+            "paper": order.paper,
+        }
+
+
+__all__ = ["ExecutionEngine", "ManualOrderError"]

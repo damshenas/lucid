@@ -3,11 +3,13 @@ import { api } from "../api/client";
 import type { WatchlistItem } from "../types";
 
 export type PollInterval = "1m" | "1h";
+export type Region = "us" | "eu" | "em";
 
 export interface WatchlistDraftItem {
   ticker: string;
   asset_class: string;
   poll_interval: PollInterval;
+  region: Region;
 }
 
 function toDraft(items: WatchlistItem[]): WatchlistDraftItem[] {
@@ -17,7 +19,12 @@ function toDraft(items: WatchlistItem[]): WatchlistDraftItem[] {
   // "saving" a toggle on it 404s (PATCH/DELETE on a ticker never really added).
   return items
     .filter((i) => i.on_watchlist)
-    .map((i) => ({ ticker: i.ticker, asset_class: i.asset_class, poll_interval: i.poll_interval }));
+    .map((i) => ({
+      ticker: i.ticker,
+      asset_class: i.asset_class,
+      poll_interval: i.poll_interval,
+      region: i.region,
+    }));
 }
 
 function isDirty(saved: WatchlistDraftItem[], draft: WatchlistDraftItem[]): boolean {
@@ -25,7 +32,12 @@ function isDirty(saved: WatchlistDraftItem[], draft: WatchlistDraftItem[]): bool
   const savedByTicker = new Map(saved.map((s) => [s.ticker, s]));
   return draft.some((d) => {
     const s = savedByTicker.get(d.ticker);
-    return !s || s.asset_class !== d.asset_class || s.poll_interval !== d.poll_interval;
+    return (
+      !s ||
+      s.asset_class !== d.asset_class ||
+      s.poll_interval !== d.poll_interval ||
+      s.region !== d.region
+    );
   });
 }
 
@@ -38,6 +50,7 @@ export interface WatchlistDraft {
   addTicker: (ticker: string, assetClass: string) => string | null;
   removeTicker: (ticker: string) => void;
   toggleInterval: (ticker: string) => void;
+  cycleRegion: (ticker: string) => void;
   /** Diffs draft against last-saved and issues the minimal add/remove/update calls,
    * then refetches. Called from the page-level Save button (pages/Settings.tsx),
    * alongside the schema-field save — there's no separate Watchlist save button. */
@@ -80,7 +93,10 @@ export function useWatchlistDraft(): WatchlistDraft {
     const t = ticker.trim().toUpperCase();
     if (!t) return null;
     if (draft.some((d) => d.ticker === t)) return `${t} is already in the list.`;
-    setDraft((prev) => [...prev, { ticker: t, asset_class: assetClass, poll_interval: "1h" }]);
+    setDraft((prev) => [
+      ...prev,
+      { ticker: t, asset_class: assetClass, poll_interval: "1h", region: "us" },
+    ]);
     return null;
   }
 
@@ -96,6 +112,18 @@ export function useWatchlistDraft(): WatchlistDraft {
     );
   }
 
+  const REGION_CYCLE: Region[] = ["us", "eu", "em"];
+
+  function cycleRegion(ticker: string) {
+    setDraft((prev) =>
+      prev.map((d) => {
+        if (d.ticker !== ticker) return d;
+        const next = REGION_CYCLE[(REGION_CYCLE.indexOf(d.region) + 1) % REGION_CYCLE.length];
+        return { ...d, region: next };
+      }),
+    );
+  }
+
   async function commit(): Promise<void> {
     const savedByTicker = new Map(saved.map((s) => [s.ticker, s]));
     const draftByTicker = new Map(draft.map((d) => [d.ticker, d]));
@@ -104,14 +132,16 @@ export function useWatchlistDraft(): WatchlistDraft {
     const toRemove = saved.filter((s) => !draftByTicker.has(s.ticker));
     const toUpdate = draft.filter((d) => {
       const s = savedByTicker.get(d.ticker);
-      return s !== undefined && s.poll_interval !== d.poll_interval;
+      return s !== undefined && (s.poll_interval !== d.poll_interval || s.region !== d.region);
     });
 
     try {
       await Promise.all([
-        ...toAdd.map((d) => api.addToWatchlist(d.ticker, d.asset_class, d.poll_interval)),
+        ...toAdd.map((d) => api.addToWatchlist(d.ticker, d.asset_class, d.poll_interval, d.region)),
         ...toRemove.map((s) => api.removeFromWatchlist(s.ticker)),
-        ...toUpdate.map((d) => api.updateWatchlistItem(d.ticker, { poll_interval: d.poll_interval })),
+        ...toUpdate.map((d) =>
+          api.updateWatchlistItem(d.ticker, { poll_interval: d.poll_interval, region: d.region }),
+        ),
       ]);
     } finally {
       // Resync with whatever actually landed, whether commit succeeded outright or
@@ -121,5 +151,5 @@ export function useWatchlistDraft(): WatchlistDraft {
     }
   }
 
-  return { draft, loaded, error, dirty, addTicker, removeTicker, toggleInterval, commit };
+  return { draft, loaded, error, dirty, addTicker, removeTicker, toggleInterval, cycleRegion, commit };
 }
