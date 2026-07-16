@@ -35,6 +35,12 @@ LIVE_BASE_URL = "https://live.trading212.com"
 REQUIRED_CONFIG = ["key_id", "secret_key"]
 OPTIONAL_CONFIG = {"timeout_seconds": 10.0, "retry_attempts": 3, "backoff_base": 0.2}
 
+# Trading212 requires the full instrument ticker (e.g. "AAPL_US_EQ"), not the plain
+# symbol Lucid uses everywhere else (price storage, watchlist, positions). When more
+# than one instrument matches a plain symbol (e.g. multiple listings), prefer common
+# stock over ETF. Lower rank = preferred.
+_SUFFIX_PRIORITY: dict[str, int] = {"_US_EQ": 0, "_US_ETF": 1}
+
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 _logger = get_logger("com.trading212")
 
@@ -67,6 +73,7 @@ class Trading212Client:
             headers={"Authorization": f"Basic {auth}"},
             timeout=timeout_seconds,
         )
+        self._instruments_cache: list[dict[str, Any]] | None = None
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -91,6 +98,34 @@ class Trading212Client:
                 raise Trading212Error(f"HTTP {exc.response.status_code} for {path}") from exc
         raise Trading212Error(f"request failed after {self._retry_attempts} attempts: {last_exc}")
 
+    async def _get_instruments(self) -> list[dict[str, Any]]:
+        if self._instruments_cache is None:
+            data = await self.request("GET", "/api/v0/equity/metadata/instruments") or []
+            self._instruments_cache = data if isinstance(data, list) else []
+        return self._instruments_cache
+
+    async def resolve_ticker(self, raw: str) -> str:
+        """Map a plain symbol (e.g. "AAPL") to Trading212's instrument ticker (e.g.
+        "AAPL_US_EQ"). Already-suffixed tickers are returned unchanged. Falls back to
+        the raw ticker unchanged if no match is found — let Trading212 reject it with
+        a clear error rather than silently failing here."""
+        if "_" in raw:
+            return raw
+        symbol = raw.upper().strip()
+        instruments = await self._get_instruments()
+        candidates = [i for i in instruments if str(i.get("ticker", "")).split("_")[0] == symbol]
+        if not candidates:
+            return symbol
+
+        def _rank(ticker: str) -> int:
+            for suffix, rank in _SUFFIX_PRIORITY.items():
+                if ticker.endswith(suffix):
+                    return rank
+            return 99
+
+        candidates.sort(key=lambda i: _rank(str(i.get("ticker", ""))))
+        return str(candidates[0]["ticker"])
+
 
 class Trading212Broker(Broker):
     name = "trading212"
@@ -102,7 +137,8 @@ class Trading212Broker(Broker):
     async def place_market_order(
         self, ticker: str, quantity: float, *, asset_class: str = AssetClass.equity.value
     ) -> OrderResult:
-        payload = {"ticker": ticker, "quantity": quantity}
+        instrument_ticker = await self._client.resolve_ticker(ticker)
+        payload = {"ticker": instrument_ticker, "quantity": quantity}
         data = await self._client.request("POST", "/api/v0/equity/orders/market", json=payload)
         data = data or {}
         return OrderResult(
@@ -115,22 +151,31 @@ class Trading212Broker(Broker):
         )
 
     async def get_positions(self) -> list[BrokerPosition]:
-        data = await self._client.request("GET", "/api/v0/equity/portfolio") or []
-        return [
-            BrokerPosition(
-                ticker=item["ticker"],
-                quantity=float(item.get("quantity", 0.0)),
-                avg_price=float(item.get("averagePrice", 0.0)),
-                market_price=item.get("currentPrice"),
+        data = await self._client.request("GET", "/api/v0/equity/positions") or []
+        positions = []
+        for item in data:
+            # Trading212 nests the ticker inside "instrument" rather than returning
+            # it top-level; normalize back to the plain symbol used everywhere else
+            # in Lucid (e.g. "AAPL_US_EQ" -> "AAPL").
+            raw_ticker = item.get("ticker") or (item.get("instrument") or {}).get("ticker", "")
+            positions.append(
+                BrokerPosition(
+                    ticker=str(raw_ticker).split("_")[0],
+                    quantity=float(item.get("quantity", 0.0)),
+                    avg_price=float(item.get("averagePricePaid", 0.0)),
+                    market_price=item.get("currentPrice"),
+                )
             )
-            for item in data
-        ]
+        return positions
 
     async def get_account_summary(self) -> AccountSummary:
-        data = await self._client.request("GET", "/api/v0/equity/account/cash") or {}
+        data = await self._client.request("GET", "/api/v0/equity/account/summary") or {}
+        cash = data.get("cash") or {}
+        cash_available = float(cash.get("availableToTrade", 0.0))
+        equity = data.get("totalValue")
         return AccountSummary(
-            cash=float(data.get("free", 0.0)),
-            equity=float(data.get("total", 0.0)),
+            cash=cash_available,
+            equity=float(equity) if equity is not None else cash_available,
         )
 
     async def cancel_order(self, broker_order_id: str) -> bool:

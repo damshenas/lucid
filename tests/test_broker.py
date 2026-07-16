@@ -72,12 +72,19 @@ def _mock_client(handler) -> Trading212Client:
 
 async def test_trading212_place_order_and_positions() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/metadata/instruments"):
+            return httpx.Response(200, json=[{"ticker": "AAPL_US_EQ", "name": "Apple"}])
         if request.url.path.endswith("/orders/market"):
             return httpx.Response(200, json={"id": 123, "status": "FILLED", "fillPrice": 101.5})
-        if request.url.path.endswith("/portfolio"):
-            return httpx.Response(200, json=[{"ticker": "AAPL", "quantity": 3, "averagePrice": 100}])
-        if request.url.path.endswith("/account/cash"):
-            return httpx.Response(200, json={"free": 500.0, "total": 800.0})
+        if request.url.path.endswith("/positions"):
+            return httpx.Response(
+                200,
+                json=[{"ticker": "AAPL_US_EQ", "quantity": 3, "averagePricePaid": 100}],
+            )
+        if request.url.path.endswith("/account/summary"):
+            return httpx.Response(
+                200, json={"cash": {"availableToTrade": 500.0}, "totalValue": 800.0}
+            )
         return httpx.Response(404)
 
     client = _mock_client(handler)
@@ -97,6 +104,24 @@ async def test_trading212_place_order_and_positions() -> None:
     await client.aclose()
 
 
+async def test_trading212_resolve_ticker_appends_instrument_suffix() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/metadata/instruments"):
+            return httpx.Response(
+                200,
+                json=[
+                    {"ticker": "AAPL_US_EQ", "name": "Apple"},
+                    {"ticker": "AAPL_US_ETF", "name": "Some ETF"},
+                ],
+            )
+        return httpx.Response(404)
+
+    client = _mock_client(handler)
+    assert await client.resolve_ticker("aapl") == "AAPL_US_EQ"
+    assert await client.resolve_ticker("AAPL_US_ETF") == "AAPL_US_ETF"
+    await client.aclose()
+
+
 async def test_trading212_retries_then_fails() -> None:
     calls = {"n": 0}
 
@@ -106,6 +131,6 @@ async def test_trading212_retries_then_fails() -> None:
 
     client = _mock_client(handler)
     with pytest.raises(Trading212Error):
-        await client.request("GET", "/api/v0/equity/portfolio")
+        await client.request("GET", "/api/v0/equity/positions")
     assert calls["n"] == 2  # retry_attempts
     await client.aclose()
