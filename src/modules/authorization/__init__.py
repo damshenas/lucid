@@ -28,6 +28,7 @@ class Permission(str, Enum):
     edit_own_credentials = "edit_own_credentials"
     edit_own_strategies = "edit_own_strategies"
     change_password = "change_password"
+    manage_trading_data = "manage_trading_data"
 
 
 ROLE_PERMISSIONS: dict[str, set[Permission]] = {
@@ -35,6 +36,7 @@ ROLE_PERMISSIONS: dict[str, set[Permission]] = {
         Permission.manage_users,
         Permission.edit_system_settings,
         Permission.change_password,
+        Permission.manage_trading_data,
     },
     Role.trader.value: {
         Permission.trade,

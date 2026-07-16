@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from ..models.base import PositionStatus
 from ..models.position import Position
@@ -45,3 +45,11 @@ class PositionRepository(BaseRepository[Position]):
         if tier not in (1, 2):
             raise ValueError(f"invalid profit tier {tier!r}; must be 1 or 2")
         return await self.update(position, **{f"profit_tier{tier}_taken": True})
+
+    async def delete_all_for_user(self, user_id: int) -> int:
+        """Hard-delete every position (open or closed) for a user — used by the admin
+        "reset trading data" endpoint (src/api/v1/admin.py) to wipe history before a
+        fresh broker sync. Returns the number of rows removed."""
+        result = await self.session.execute(delete(Position).where(Position.user_id == user_id))
+        await self.session.flush()
+        return int(result.rowcount or 0)

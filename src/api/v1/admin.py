@@ -8,17 +8,24 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.conf.schema import AssetClass
 from src.modules.authentication import AuthError, AuthService
 from src.modules.authentication.password import hash_password
 from src.modules.authorization import Permission
 from src.modules.com.git import GitError
 from src.modules.db.models.base import Role
 from src.modules.db.models.user import User
+from src.modules.db.repositories.decision import StrategyDecisionRepository
+from src.modules.db.repositories.order import OrderRepository
+from src.modules.db.repositories.position import PositionRepository
 from src.modules.db.repositories.price import PriceFetchAttemptRepository
+from src.modules.db.repositories.signal import SignalOutcomeRepository, SignalRepository
 from src.modules.db.repositories.user import UserRepository
+from src.modules.encryption import CredentialNotConfiguredError
 from src.modules.price import storage
 
 from ..deps import get_context, get_session, require_permission
+from .positions import sync_positions_from_broker
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
@@ -36,6 +43,12 @@ class UpdateUserIn(BaseModel):
 
 class ResetPasswordIn(BaseModel):
     new_password: str = Field(min_length=8, max_length=72)
+
+
+class ResetTradingDataIn(BaseModel):
+    user_id: int | None = None
+    asset_class: str = AssetClass.equity.value
+    sync_from_broker: bool = True
 
 
 @router.get("/users")
@@ -231,3 +244,65 @@ async def git_sync(
     except GitError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     return {"commit": commit, "deployed": copied}
+
+
+@router.post("/reset-trading-data")
+async def reset_trading_data(
+    request: Request,
+    body: ResetTradingDataIn,
+    session: AsyncSession = Depends(get_session),
+    _: User = Depends(require_permission(Permission.manage_trading_data)),
+) -> dict[str, Any]:
+    """Danger-zone "start fresh" reset: hard-deletes a trader's (or, when ``user_id``
+    is omitted, every trader's) positions, orders, signals, signal outcomes and
+    strategy-decision log. Never touches users, credentials, watchlist, or config/
+    settings — only trade history and its derived state. When ``sync_from_broker``
+    (default ``True``), each reset user's *current* broker holdings are re-synced
+    into ``positions`` right after the wipe (the same reconciliation ``POST
+    /api/v1/positions/sync`` performs), so the app reflects reality immediately
+    instead of showing zero positions until the next manual sync. A broker/
+    credential failure for one user is recorded per-user in the response rather than
+    failing the whole request — the wipe itself always completes."""
+    ctx = get_context(request)
+    user_repo = UserRepository(session)
+    if body.user_id is not None:
+        target = await user_repo.get_by_id(body.user_id)
+        if target is None or target.role != Role.trader.value:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "trader not found")
+        targets = [target]
+    else:
+        targets = [u for u in await user_repo.get_all() if u.role == Role.trader.value]
+
+    reset_counts: dict[str, dict[str, int]] = {}
+    for user in targets:
+        # Delete signal_outcomes before signals (FK signal_outcomes.signal_id ->
+        # signals.id) — order.position_id/signal_id are ON DELETE SET NULL so orders
+        # can be wiped in any order relative to positions/signals.
+        orders_deleted = await OrderRepository(session).delete_all_for_user(user.id)
+        outcomes_deleted = await SignalOutcomeRepository(session).delete_all_for_user(user.id)
+        signals_deleted = await SignalRepository(session).delete_all_for_user(user.id)
+        decisions_deleted = await StrategyDecisionRepository(session).delete_all_for_user(user.id)
+        positions_deleted = await PositionRepository(session).delete_all_for_user(user.id)
+        reset_counts[user.username] = {
+            "orders": orders_deleted,
+            "signal_outcomes": outcomes_deleted,
+            "signals": signals_deleted,
+            "decisions": decisions_deleted,
+            "positions": positions_deleted,
+        }
+    await session.commit()
+
+    sync_results: dict[str, Any] = {}
+    if body.sync_from_broker:
+        for user in targets:
+            try:
+                sync_results[user.username] = await sync_positions_from_broker(
+                    ctx, session, user.id, body.asset_class
+                )
+            except CredentialNotConfiguredError as exc:
+                sync_results[user.username] = {"error": str(exc)}
+            except Exception as exc:  # noqa: BLE001
+                sync_results[user.username] = {"error": str(exc)}
+        await session.commit()
+
+    return {"reset": reset_counts, "synced": sync_results}

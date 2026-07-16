@@ -11,6 +11,7 @@ import type {
   Position,
   PriceBars,
   PriceCoverageRow,
+  ResetTradingDataResult,
   SettingsSchema,
   Signal,
   Strategy,
@@ -177,6 +178,11 @@ export const api = {
     }),
   deleteAdminUser: (id: number) =>
     request<void>(`/api/v1/admin/users/${id}`, { method: "DELETE" }),
+  resetTradingData: (userId: number, syncFromBroker = true) =>
+    request<ResetTradingDataResult>("/api/v1/admin/reset-trading-data", {
+      method: "POST",
+      body: JSON.stringify({ user_id: userId, sync_from_broker: syncFromBroker }),
+    }),
   adminJobs: () => request<Job[]>("/api/v1/admin/jobs"),
   priceCoverageReport: () =>
     request<PriceCoverageRow[]>("/api/v1/admin/reports/price-coverage"),

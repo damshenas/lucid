@@ -7,7 +7,8 @@ export type Permission =
   | "edit_system_settings"
   | "edit_own_credentials"
   | "edit_own_strategies"
-  | "change_password";
+  | "change_password"
+  | "manage_trading_data";
 
 /**
  * Mirrors ROLE_PERMISSIONS in src/modules/authorization/__init__.py.
@@ -15,7 +16,7 @@ export type Permission =
  * every permission on every request.
  */
 const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
-  admin: ["manage_users", "edit_system_settings", "change_password"],
+  admin: ["manage_users", "edit_system_settings", "change_password", "manage_trading_data"],
   trader: [
     "trade",
     "view_trading",

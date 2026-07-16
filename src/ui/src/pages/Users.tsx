@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { KeyRound, Power, Trash2, UserPlus } from "lucide-react";
+import { KeyRound, Power, RotateCcw, Trash2, UserPlus } from "lucide-react";
 import { api } from "../api/client";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
@@ -96,6 +96,30 @@ export function Users() {
     }
   }
 
+  async function resetTradingData(u: AdminUser) {
+    if (
+      !window.confirm(
+        `Reset ALL trading data for "${u.username}" — positions, orders, signals, and ` +
+          `the strategy decision log? This cannot be undone. Their broker's current ` +
+          `holdings will be re-synced into positions right after.`
+      )
+    )
+      return;
+    setBusyId(u.id);
+    setError(null);
+    try {
+      const result = await api.resetTradingData(u.id, true);
+      const sync = result.synced[u.username];
+      if (sync?.error) {
+        setError(`Reset done, but broker sync failed: ${sync.error}`);
+      }
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   return (
     <div className="animate-fade-in-up space-y-4">
       <h2 className="text-xl font-semibold tracking-tight">Users</h2>
@@ -158,6 +182,16 @@ export function Users() {
                       >
                         <Power size={16} />
                       </Button>
+                      {u.role === "trader" && (
+                        <Button
+                          variant="ghost"
+                          disabled={busyId === u.id}
+                          onClick={() => resetTradingData(u)}
+                          title="Reset trading data (positions/orders/signals/decisions) and re-sync from broker"
+                        >
+                          <RotateCcw size={16} />
+                        </Button>
+                      )}
                       <Button
                         variant="ghost"
                         disabled={busyId === u.id}

@@ -348,6 +348,64 @@ def test_sync_reflects_broker_positions_after_manual_order(client: TestClient) -
     assert any(p["ticker"] == "AMZN" for p in positions_after)
 
 
+def test_admin_reset_trading_data_wipes_history_and_resyncs(client: TestClient) -> None:
+    """Admin's danger-zone reset must hard-delete a trader's positions/orders/signals/
+    decisions and nothing else (no user/credential/config change), then re-sync
+    positions from the broker (mock PaperBroker still reports the AMZN position, so it
+    should come back even though the local row was just wiped)."""
+    admin_token = client.post(
+        "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
+    ).json()["access_token"]
+    client.post(
+        "/api/v1/admin/users",
+        headers=_auth(admin_token),
+        json={"username": "trader1", "password": "traderpass", "role": "trader"},
+    )
+    trader_token = client.post(
+        "/api/v1/auth/login", json={"username": "trader1", "password": "traderpass"}
+    ).json()["access_token"]
+
+    resp = client.post(
+        "/api/v1/orders/manual",
+        headers=_auth(trader_token),
+        json={"ticker": "AMZN", "side": "buy", "quantity": 1},
+    )
+    assert resp.status_code == 201
+    trader_id = client.get("/api/v1/admin/users", headers=_auth(admin_token)).json()
+    trader_id = next(u["id"] for u in trader_id if u["username"] == "trader1")
+
+    assert len(client.get("/api/v1/orders", headers=_auth(trader_token)).json()) == 1
+    assert len(client.get("/api/v1/positions", headers=_auth(trader_token)).json()) == 1
+
+    # traders cannot trigger a reset
+    denied = client.post(
+        "/api/v1/admin/reset-trading-data",
+        headers=_auth(trader_token),
+        json={"user_id": trader_id},
+    )
+    assert denied.status_code == 403
+
+    resp = client.post(
+        "/api/v1/admin/reset-trading-data",
+        headers=_auth(admin_token),
+        json={"user_id": trader_id},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["reset"]["trader1"]["orders"] == 1
+    assert body["reset"]["trader1"]["positions"] == 1
+
+    # Orders/decisions history is gone, but the broker still reports AMZN, so the
+    # position reappears from the post-reset sync (not from the deleted row).
+    assert client.get("/api/v1/orders", headers=_auth(trader_token)).json() == []
+    positions_after = client.get("/api/v1/positions", headers=_auth(trader_token)).json()
+    assert any(p["ticker"] == "AMZN" for p in positions_after)
+
+    # The trader account itself (and its role) is untouched by the reset.
+    users = client.get("/api/v1/admin/users", headers=_auth(admin_token)).json()
+    assert any(u["id"] == trader_id and u["role"] == "trader" for u in users)
+
+
 def test_admin_reports_permission_and_empty_state(client: TestClient) -> None:
     admin_token = client.post(
         "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
