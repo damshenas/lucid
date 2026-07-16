@@ -10,6 +10,7 @@ real network calls.
 from __future__ import annotations
 
 import asyncio
+import base64
 from typing import Any
 
 import httpx
@@ -24,13 +25,14 @@ from src.modules.broker.base import (
 )
 from src.modules.logger import get_logger
 
-# Trading212 uses a single API key that works against both environments — which
-# account it hits is determined entirely by the base URL, not a separate paper
-# credential. These are fixed platform endpoints, not user-supplied config.
+# Trading212 uses a single API credential pair (key_id + secret_key), sent as HTTP
+# Basic auth, that works against both environments — which account it hits is
+# determined entirely by the base URL, not a separate paper credential. These base
+# URLs are fixed platform endpoints, not user-supplied config.
 DEMO_BASE_URL = "https://demo.trading212.com"
 LIVE_BASE_URL = "https://live.trading212.com"
 
-REQUIRED_CONFIG = ["api_key"]
+REQUIRED_CONFIG = ["key_id", "secret_key"]
 OPTIONAL_CONFIG = {"timeout_seconds": 10.0, "retry_attempts": 3, "backoff_base": 0.2}
 
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
@@ -44,7 +46,8 @@ class Trading212Error(BrokerError):
 class Trading212Client:
     def __init__(
         self,
-        api_key: str,
+        key_id: str,
+        secret_key: str,
         base_url: str,
         *,
         timeout_seconds: float = 10.0,
@@ -52,15 +55,16 @@ class Trading212Client:
         backoff_base: float = 0.2,
         client: httpx.AsyncClient | None = None,
     ) -> None:
-        if not api_key or not base_url:
-            raise Trading212Error("api_key and base_url are required")
+        if not key_id or not secret_key or not base_url:
+            raise Trading212Error("key_id, secret_key and base_url are required")
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout_seconds
         self._retry_attempts = max(1, retry_attempts)
         self._backoff_base = backoff_base
+        auth = base64.b64encode(f"{key_id}:{secret_key}".encode()).decode()
         self._client = client or httpx.AsyncClient(
             base_url=self._base_url,
-            headers={"Authorization": api_key},
+            headers={"Authorization": f"Basic {auth}"},
             timeout=timeout_seconds,
         )
 

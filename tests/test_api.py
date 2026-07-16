@@ -427,13 +427,13 @@ def test_system_credentials_admin_only(client: TestClient) -> None:
     set_resp = client.post(
         "/api/v1/credentials/system",
         headers=_auth(admin_token),
-        json={"key": "trading212_api_key", "value": "SYSTEM_KEY"},
+        json={"key": "trading212_key_id", "value": "SYSTEM_KEY"},
     )
     assert set_resp.status_code == 204
 
     catalog2 = client.get("/api/v1/credentials/system", headers=_auth(admin_token)).json()
     configured = {row["key"]: row["configured"] for row in catalog2}
-    assert configured["trading212_api_key"] is True
+    assert configured["trading212_key_id"] is True
 
     # traders cannot manage system credentials
     assert (
@@ -443,7 +443,7 @@ def test_system_credentials_admin_only(client: TestClient) -> None:
         client.post(
             "/api/v1/credentials/system",
             headers=_auth(trader_token),
-            json={"key": "trading212_api_key", "value": "x"},
+            json={"key": "trading212_key_id", "value": "x"},
         ).status_code
         == 403
     )
@@ -477,13 +477,13 @@ def test_own_credentials_trader_only(client: TestClient) -> None:
     set_resp = client.post(
         "/api/v1/credentials/mine",
         headers=_auth(trader_token),
-        json={"key": "trading212_api_key", "value": "USER_KEY"},
+        json={"key": "trading212_key_id", "value": "USER_KEY"},
     )
     assert set_resp.status_code == 204
 
     mine2 = client.get("/api/v1/credentials/mine", headers=_auth(trader_token)).json()
     configured = {row["key"]: row["configured"] for row in mine2["credentials"]}
-    assert configured["trading212_api_key"] is True
+    assert configured["trading212_key_id"] is True
 
     toggle = client.patch(
         "/api/v1/credentials/mine/use-default",

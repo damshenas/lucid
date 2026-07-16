@@ -86,7 +86,8 @@ class AppContext:
         if self.broker_credentials_required:
             creds = self.credential_manager(session)
             try:
-                api_key = await creds.get_for_user("trading212_api_key", user_id)
+                key_id = await creds.get_for_user("trading212_key_id", user_id)
+                secret_key = await creds.get_for_user("trading212_secret_key", user_id)
             except CredentialNotConfiguredError as exc:
                 raise CredentialNotConfiguredError(
                     "broker requires trading212 credentials"
@@ -96,7 +97,8 @@ class AppContext:
                 broker_name=broker_name,
                 asset_class=asset_class,
                 paper_mode=False,
-                api_key=api_key,
+                key_id=key_id,
+                secret_key=secret_key,
                 base_url=base_url,
                 paper=paper_mode,
             )
@@ -166,7 +168,7 @@ class AppContext:
                 "trading212",
                 "equity",
                 lambda **kw: Trading212Broker(
-                    Trading212Client(kw["api_key"], kw["base_url"]),
+                    Trading212Client(kw["key_id"], kw["secret_key"], kw["base_url"]),
                     paper=bool(kw.get("paper", False)),
                 ),
             )

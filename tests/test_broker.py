@@ -65,7 +65,9 @@ async def test_registry_unknown_raises() -> None:
 def _mock_client(handler) -> Trading212Client:
     transport = httpx.MockTransport(handler)
     http = httpx.AsyncClient(base_url="https://api.t212.test", transport=transport)
-    return Trading212Client("key", "https://api.t212.test", client=http, retry_attempts=2)
+    return Trading212Client(
+        "key_id", "secret_key", "https://api.t212.test", client=http, retry_attempts=2
+    )
 
 
 async def test_trading212_place_order_and_positions() -> None:

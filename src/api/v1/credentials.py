@@ -28,15 +28,21 @@ router = APIRouter(prefix="/api/v1/credentials", tags=["credentials"])
 # string key. "platform" is a display grouping only, not used for authorization.
 CREDENTIAL_CATALOG: list[dict[str, Any]] = [
     {
-        "key": "trading212_api_key",
+        "key": "trading212_key_id",
         "label": "API Key",
         "platform": "Trading212",
         "secret": True,
     },
-    # Trading212 uses a single API key for both demo and live accounts — which
-    # account it hits is chosen via the "Paper mode" toggle (broker.paper_mode),
-    # not a user-supplied base URL. See src/modules/com/trading212 DEMO_BASE_URL /
-    # LIVE_BASE_URL.
+    {
+        "key": "trading212_secret_key",
+        "label": "API Secret",
+        "platform": "Trading212",
+        "secret": True,
+    },
+    # Trading212 authenticates via HTTP Basic auth over this key_id/secret_key pair
+    # (see Trading212Client). Which account it hits is chosen via the "Paper mode"
+    # toggle (broker.paper_mode), not a user-supplied base URL — see
+    # src/modules/com/trading212 DEMO_BASE_URL / LIVE_BASE_URL.
     # External signal-source connectors (src/modules/signal/sources.py) — a source
     # only participates (for a strategy's EXTERNAL_SOURCES, or the manual
     # POST /api/v1/signals/sources/check) once its base_url credential is set here;
