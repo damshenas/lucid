@@ -207,8 +207,14 @@ deliberately asymmetric:
   to ever have a chance to fire on it. An empty watchlist means no buy signal will
   ever be produced, regardless of which buy strategy is active.
 
-Either way, a ticker also needs **stored price bars on disk** before any strategy
-runs against it — see the price system section below.
+A sell strategy also needs **stored price bars on disk** before it runs (it can't
+decide anything about a position without knowing its current price). A *buy*
+strategy is evaluated for every watchlist ticker regardless of whether bars are
+stored yet — bars are only a hard requirement for a buy strategy that actually reads
+`context.price_data` (like `trend_follow`'s local SMA/RSI, which needs 200+ days of
+history first). A strategy that decides purely from external signal sources (see
+`strategies/buy/signal_follow.py`) never touches `price_data` at all and has no
+warm-up period — see the price system section below for the local-history case.
 
 ## 8. Price data prerequisite
 
@@ -223,8 +229,8 @@ backfill action) — the daily/intraday scheduled jobs only keep already-known t
 ## 9. External signal sources (optional)
 
 If your strategy wants a third-party opinion (Finviz/TradingView/Zacks/Barchart — see
-`src/modules/signal/sources.py`) in addition to your own price-based logic, declare
-it:
+`src/modules/signal/sources.py`) in addition to (or, like `signal_follow`, entirely
+instead of) your own price-based logic, declare it:
 
 ```python
 EXTERNAL_SOURCES = ["zacks", "tradingview"]

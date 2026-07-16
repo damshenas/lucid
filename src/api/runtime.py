@@ -238,13 +238,17 @@ class TradingRuntime:
                             item.ticker,
                         )
                         continue
+                    # Bars are only a *requirement* for a buy strategy that actually
+                    # consumes context.price_data (e.g. trend_follow's local
+                    # SMA/RSI, which needs 200+ days of history) — a strategy that
+                    # decides purely from external signal sources (e.g.
+                    # signal_follow) needs no locally-stored history at all, so
+                    # evaluation is never skipped here just because
+                    # storage.read_bars() came back empty/None. Each strategy is
+                    # responsible for saying so in its own reasoning if it does need
+                    # bars it doesn't have yet (see trend_follow's "only N bars
+                    # stored" check).
                     df = storage.read_bars(storage_path, item.ticker, "1d")
-                    if df is None or df.empty:
-                        _logger.debug(
-                            "run_strategies: no stored bars for %s — skipping (backfill it first)",
-                            item.ticker,
-                        )
-                        continue
                     try:
                         await self._evaluate_buy(user.id, item, df, values, buy, benchmark_data)
                     except Exception as exc:  # noqa: BLE001

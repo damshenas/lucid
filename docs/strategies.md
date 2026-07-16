@@ -127,6 +127,13 @@ universe), while a **buy** strategy runs over the shared **price watchlist**
 curated candidate list. An empty watchlist means buy strategies never fire; it has no
 effect on sell strategies.
 
+A buy strategy is evaluated for every watchlist ticker even if Lucid has no stored
+price bars for it yet — bars are only required by a strategy that actually reads
+`context.price_data` (`trend_follow`'s SMA/RSI needs 200+ days first). `signal_follow`
+(built-in) decides purely from external signal-provider ratings and has no such
+warm-up period. A sell strategy always needs at least one stored bar (it must know a
+position's current price).
+
 ## External signal sources
 
 A strategy can declare `EXTERNAL_SOURCES = ["zacks", "tradingview"]` to have the

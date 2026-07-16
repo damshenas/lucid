@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
 
 import pandas as pd
@@ -10,8 +11,10 @@ from fastapi.testclient import TestClient
 
 from src.api.context import AppContext
 from src.api.main import create_app
+from src.api.runtime import TradingRuntime
 from src.modules.broker import BrokerRegistry, PaperBroker
 from src.modules.price import storage
+from src.modules.signal.sources import ExternalSignal
 
 
 def _mock_broker_registry() -> BrokerRegistry:
@@ -101,6 +104,57 @@ def test_strategy_decisions_endpoint(client: TestClient) -> None:
     resp = client.get("/api/v1/strategies/trend_follow/decisions", headers=_auth(token))
     assert resp.status_code == 200
     assert resp.json() == []
+
+
+def test_run_strategies_evaluates_buy_strategy_without_stored_price_bars(
+    client: TestClient, monkeypatch
+) -> None:
+    """Regression: TradingRuntime.run_strategies used to skip buy evaluation for a
+    watchlist ticker entirely whenever no price bars were stored on disk yet — even
+    for a strategy (signal_follow) that never reads price_data at all, blocking it
+    from ever being evaluated. A ticker with zero stored bars must still reach the
+    strategy (and get a decision recorded) as long as it's on the watchlist."""
+
+    async def fake_external_signals(self, user_id, ticker, sources):
+        return [ExternalSignal(source="finviz", ticker=ticker, direction="buy")]
+
+    monkeypatch.setattr(TradingRuntime, "_external_signals", fake_external_signals)
+
+    admin_token = client.post(
+        "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
+    ).json()["access_token"]
+    client.post(
+        "/api/v1/admin/users",
+        headers=_auth(admin_token),
+        json={"username": "trader6", "password": "traderpass", "role": "trader"},
+    )
+    trader_token = client.post(
+        "/api/v1/auth/login", json={"username": "trader6", "password": "traderpass"}
+    ).json()["access_token"]
+
+    add = client.post(
+        "/api/v1/prices/watchlist",
+        headers=_auth(trader_token),
+        json={"ticker": "NFLX", "asset_class": "equity"},
+    )
+    assert add.status_code == 201
+
+    activate = client.patch(
+        "/api/v1/strategies/signal_follow/activate?direction=buy", headers=_auth(trader_token)
+    )
+    assert activate.status_code == 200
+
+    # No price bars stored anywhere for NFLX — the old code would have skipped
+    # evaluation entirely before ever calling into the strategy.
+    runtime: TradingRuntime = client.app.state.runtime
+    asyncio.run(runtime.run_strategies())
+
+    decisions = client.get(
+        "/api/v1/strategies/signal_follow/decisions", headers=_auth(trader_token)
+    ).json()
+    assert len(decisions) == 1
+    assert decisions[0]["ticker"] == "NFLX"
+    assert decisions[0]["acted"] is True
 
 
 def test_save_secret_rejected(client: TestClient) -> None:

@@ -7,6 +7,7 @@ import pandas as pd
 
 from src.modules.strategy import discover_strategies
 from src.modules.strategy.context import PositionView, StrategyContext
+from src.modules.signal.sources import ExternalSignal
 
 _LOADED = {s.name: s for s in discover_strategies("strategies")}
 
@@ -162,3 +163,54 @@ async def test_trailing_stop_widens_via_bear_regime() -> None:
 
     assert bull_decision.acted  # tight 0.5x multiplier: stop breaks
     assert not bear_decision.acted  # wide 20x bear multiplier: stop holds
+
+
+async def test_signal_follow_buys_without_any_price_data() -> None:
+    """The whole point of signal_follow: it must be able to act with
+    price_data=None (no locally-stored bars at all) — unlike trend_follow it never
+    reads context.price_data."""
+    strat = _LOADED["signal_follow"]
+    ctx = StrategyContext(
+        ticker="NFLX", user_id=1, asset_class="equity",
+        price_data=None,
+        external_signals=[
+            ExternalSignal(source="finviz", ticker="NFLX", direction="buy"),
+            ExternalSignal(source="zacks", ticker="NFLX", direction="hold"),
+        ],
+    )
+    decision = await strat.run(ctx)
+    assert decision.acted
+    assert decision.event is not None
+    assert decision.event.ticker == "NFLX"
+    assert decision.event.source == "signal_follow"
+    assert decision.event.confidence == 0.5  # 1 of 2 answered sources voted buy
+
+
+async def test_signal_follow_holds_below_vote_threshold() -> None:
+    strat = _LOADED["signal_follow"]
+    ctx = StrategyContext(
+        ticker="NFLX", user_id=1, asset_class="equity",
+        config={"strategy": {"signal_follow": {"min_buy_votes": 2}}},
+        external_signals=[
+            ExternalSignal(source="finviz", ticker="NFLX", direction="buy"),
+            ExternalSignal(source="zacks", ticker="NFLX", direction="sell"),
+        ],
+    )
+    decision = await strat.run(ctx)
+    assert not decision.acted
+    assert decision.event is None
+    assert "need 2" in decision.reasoning
+
+
+async def test_signal_follow_holds_when_no_source_configured() -> None:
+    strat = _LOADED["signal_follow"]
+    ctx = StrategyContext(
+        ticker="NFLX", user_id=1, asset_class="equity",
+        external_signals=[
+            ExternalSignal(source="finviz", ticker="NFLX", direction=None, error="not configured"),
+        ],
+    )
+    decision = await strat.run(ctx)
+    assert not decision.acted
+    assert decision.event is None
+    assert decision.reasoning == "no external signal source is configured/reachable for this ticker"
