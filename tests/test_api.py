@@ -716,6 +716,27 @@ def test_log_level_applied_live_unless_env_override(monkeypatch) -> None:
     assert logging.getLogger().getEffectiveLevel() == logging.WARNING
 
 
+def test_configure_logging_applies_level_even_after_handlers_already_set_up() -> None:
+    """Regression: many modules call ``get_logger()`` at *import* time (module-level
+    ``_logger = get_logger(...)``), which implicitly runs ``configure_logging()``
+    with its default ``level="INFO"`` before src/api/main.py's lifespan ever calls it
+    with the real, resolved level. By the time this test runs, other tests have
+    already imported those modules and triggered exactly that implicit call, so
+    ``configure_logging`` is already past its one-time handler setup — this asserts
+    a *later* call still updates the effective level instead of being a no-op."""
+    import logging
+
+    from src.modules.logger import configure_logging
+
+    handlers_before = len(logging.getLogger().handlers)
+    configure_logging(level="DEBUG")
+    assert logging.getLogger().getEffectiveLevel() == logging.DEBUG
+    # Handler setup must still be one-time — a repeat call never duplicates handlers.
+    assert len(logging.getLogger().handlers) == handlers_before
+    configure_logging(level="WARNING")
+    assert logging.getLogger().getEffectiveLevel() == logging.WARNING
+
+
 def test_settings_save_applies_log_level_live_unless_env_override(
     client: TestClient, monkeypatch
 ) -> None:

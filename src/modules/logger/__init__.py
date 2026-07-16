@@ -26,30 +26,44 @@ _configured = False
 
 
 def configure_logging(level: str = "INFO", file_path: str | None = None) -> None:
-    """Configure the root logger once. Idempotent."""
+    """Configure the root logger's handlers once (idempotent); the level is applied
+    on *every* call, even after the first.
+
+    This distinction matters: ``get_logger()`` is called at *import* time by many
+    modules' own module-level ``_logger = get_logger(name)`` (bus, execution,
+    schedules, com/*, ...) — which happens while ``src.api.main`` is still being
+    imported, long before its ``_lifespan`` gets a chance to call this function with
+    the real, resolved level (``LOG_LEVEL`` env var or the DB-backed
+    ``logger.level`` setting). That implicit call configures with the default
+    ``level="INFO"`` argument. If the level were only ever applied on the first call
+    (guarded the same way as handler setup), that accidental import-time call would
+    permanently lock the process at INFO — the later, real call from ``_lifespan``
+    would be a silent no-op regardless of ``LOG_LEVEL``/``logger.level``. Handlers,
+    on the other hand, must still only ever be added once (else every such call
+    would duplicate every log line).
+    """
     global _configured
-    if _configured:
-        return
 
     root = logging.getLogger()
+    if not _configured:
+        formatter = logging.Formatter(_FORMAT, datefmt=_DATEFMT)
+
+        stream = logging.StreamHandler(sys.stdout)
+        stream.setFormatter(formatter)
+        root.addHandler(stream)
+
+        if file_path:
+            try:
+                file_handler = logging.FileHandler(file_path)
+                file_handler.setFormatter(formatter)
+                root.addHandler(file_handler)
+            except (OSError, PermissionError):
+                # Directory may not exist yet in local dev; stdout logging still works.
+                root.warning("could not open log file %s — logging to stdout only", file_path)
+
+        _configured = True
+
     root.setLevel(getattr(logging, level.upper(), logging.INFO))
-
-    formatter = logging.Formatter(_FORMAT, datefmt=_DATEFMT)
-
-    stream = logging.StreamHandler(sys.stdout)
-    stream.setFormatter(formatter)
-    root.addHandler(stream)
-
-    if file_path:
-        try:
-            file_handler = logging.FileHandler(file_path)
-            file_handler.setFormatter(formatter)
-            root.addHandler(file_handler)
-        except (OSError, PermissionError):
-            # Directory may not exist yet in local dev; stdout logging still works.
-            root.warning("could not open log file %s — logging to stdout only", file_path)
-
-    _configured = True
 
 
 def set_level(level: str) -> None:
