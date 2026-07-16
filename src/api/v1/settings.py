@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +17,11 @@ from src.modules.logger import set_level
 from ..deps import get_context, get_current_user, get_session
 
 router = APIRouter(prefix="/api/v1/settings", tags=["settings"])
+
+# Config keys whose new value should take effect immediately instead of waiting for
+# the next scheduled `run_strategies` tick (up to `schedule.poll_positions_seconds`,
+# default 5 minutes) — see the background-task trigger in save_values() below.
+_STRATEGY_ACTIVATION_KEYS = {"strategy.active_buy_strategy", "strategy.active_sell_strategy"}
 
 
 class SettingsIn(BaseModel):
@@ -55,6 +60,7 @@ async def get_values(
 async def save_values(
     request: Request,
     body: SettingsIn,
+    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
     user: User = Depends(get_current_user),
 ) -> dict[str, bool]:
@@ -79,4 +85,13 @@ async def save_values(
     # set here has no effect if the ops-level env var override is present.
     if "logger.level" in body.values and "LOG_LEVEL" not in os.environ:
         set_level(str(body.values["logger.level"]))
+    # A newly activated buy/sell strategy should act on the very next tick, not
+    # whenever the scheduled interval next fires — kick off one evaluation pass in
+    # the background (never blocks this response on strategy evaluation, which may
+    # make real network calls to configured external signal sources).
+    if _STRATEGY_ACTIVATION_KEYS.intersection(body.values):
+        runtime = getattr(request.app.state, "runtime", None)
+        if runtime is not None:
+            background_tasks.add_task(runtime.run_strategies)
     return {"ok": True}
+

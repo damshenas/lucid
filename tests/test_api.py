@@ -169,6 +169,69 @@ def test_save_secret_rejected(client: TestClient) -> None:
     assert resp.status_code == 400
 
 
+def test_settings_save_triggers_immediate_run_strategies_on_activation_change(
+    client: TestClient, monkeypatch
+) -> None:
+    """Activating a strategy shouldn't have to wait for the next scheduled
+    run_strategies tick (up to schedule.poll_positions_seconds) — saving a
+    strategy.active_*_strategy change must kick off an immediate background pass."""
+    calls: list[None] = []
+
+    async def fake_run_strategies(self) -> None:
+        calls.append(None)
+
+    monkeypatch.setattr(TradingRuntime, "run_strategies", fake_run_strategies)
+
+    admin_token = client.post(
+        "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
+    ).json()["access_token"]
+
+    # An unrelated settings change must NOT trigger a background run.
+    client.post(
+        "/api/v1/settings",
+        headers=_auth(admin_token),
+        json={"values": {"execution.fixed_usd": 75.0}},
+    )
+    assert calls == []
+
+    resp = client.post(
+        "/api/v1/settings",
+        headers=_auth(admin_token),
+        json={"values": {"strategy.active_buy_strategy": "trend_follow"}},
+    )
+    assert resp.status_code == 200
+    assert calls == [None]
+
+
+def test_activate_strategy_triggers_immediate_run_strategies(
+    client: TestClient, monkeypatch
+) -> None:
+    calls: list[None] = []
+
+    async def fake_run_strategies(self) -> None:
+        calls.append(None)
+
+    monkeypatch.setattr(TradingRuntime, "run_strategies", fake_run_strategies)
+
+    admin_token = client.post(
+        "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
+    ).json()["access_token"]
+    client.post(
+        "/api/v1/admin/users",
+        headers=_auth(admin_token),
+        json={"username": "trader7", "password": "traderpass", "role": "trader"},
+    )
+    trader_token = client.post(
+        "/api/v1/auth/login", json={"username": "trader7", "password": "traderpass"}
+    ).json()["access_token"]
+
+    resp = client.patch(
+        "/api/v1/strategies/trend_follow/activate?direction=buy", headers=_auth(trader_token)
+    )
+    assert resp.status_code == 200
+    assert calls == [None]
+
+
 def test_settings_write_requires_permission(client: TestClient) -> None:
     admin_token = client.post(
         "/api/v1/auth/setup", json={"username": "root", "password": "password123"}

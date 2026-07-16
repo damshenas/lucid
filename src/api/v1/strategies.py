@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.modules.authorization import Permission
@@ -55,6 +55,7 @@ async def scan_strategies(
 async def activate_strategy(
     request: Request,
     name: str,
+    background_tasks: BackgroundTasks,
     direction: str = Query(..., pattern="^(buy|sell)$"),
     session: AsyncSession = Depends(get_session),
     user: User = Depends(require_permission(Permission.edit_own_strategies)),
@@ -67,6 +68,12 @@ async def activate_strategy(
         f"strategy.active_{direction}_strategy", name, role=user.role, user_id=user.id
     )
     await session.commit()
+    # Act on the very next tick rather than waiting for the scheduled interval — see
+    # the identical trigger in src/api/v1/settings.py's save_values(), the other way
+    # to change the active strategy (Settings > Strategy's bottom Save button).
+    runtime = getattr(request.app.state, "runtime", None)
+    if runtime is not None:
+        background_tasks.add_task(runtime.run_strategies)
     return {"active": name, "direction": direction}
 
 
