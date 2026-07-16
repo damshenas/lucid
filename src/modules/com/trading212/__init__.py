@@ -24,7 +24,13 @@ from src.modules.broker.base import (
 )
 from src.modules.logger import get_logger
 
-REQUIRED_CONFIG = ["api_key", "base_url"]
+# Trading212 uses a single API key that works against both environments — which
+# account it hits is determined entirely by the base URL, not a separate paper
+# credential. These are fixed platform endpoints, not user-supplied config.
+DEMO_BASE_URL = "https://demo.trading212.com"
+LIVE_BASE_URL = "https://live.trading212.com"
+
+REQUIRED_CONFIG = ["api_key"]
 OPTIONAL_CONFIG = {"timeout_seconds": 10.0, "retry_attempts": 3, "backoff_base": 0.2}
 
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
@@ -133,6 +139,8 @@ class Trading212Broker(Broker):
 
 
 __all__ = [
+    "DEMO_BASE_URL",
+    "LIVE_BASE_URL",
     "OPTIONAL_CONFIG",
     "REQUIRED_CONFIG",
     "Trading212Broker",

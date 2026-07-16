@@ -18,6 +18,7 @@ from src.modules.authentication import TokenService
 from src.modules.broker import BrokerRegistry
 from src.modules.broker.base import Broker
 from src.modules.bus import EventBus
+from src.modules.com import trading212
 from src.modules.com.trading212 import Trading212Broker, Trading212Client
 from src.modules.configs import ConfigService, load_default_config
 from src.modules.db.connection import Database
@@ -86,11 +87,11 @@ class AppContext:
             creds = self.credential_manager(session)
             try:
                 api_key = await creds.get_for_user("trading212_api_key", user_id)
-                base_url = await creds.get_for_user("trading212_base_url", user_id)
             except CredentialNotConfiguredError as exc:
                 raise CredentialNotConfiguredError(
                     "broker requires trading212 credentials"
                 ) from exc
+            base_url = trading212.DEMO_BASE_URL if paper_mode else trading212.LIVE_BASE_URL
             return self.broker_registry.resolve(
                 broker_name=broker_name,
                 asset_class=asset_class,

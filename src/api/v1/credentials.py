@@ -33,12 +33,10 @@ CREDENTIAL_CATALOG: list[dict[str, Any]] = [
         "platform": "Trading212",
         "secret": True,
     },
-    {
-        "key": "trading212_base_url",
-        "label": "Base URL",
-        "platform": "Trading212",
-        "secret": False,
-    },
+    # Trading212 uses a single API key for both demo and live accounts — which
+    # account it hits is chosen via the "Paper mode" toggle (broker.paper_mode),
+    # not a user-supplied base URL. See src/modules/com/trading212 DEMO_BASE_URL /
+    # LIVE_BASE_URL.
     # External signal-source connectors (src/modules/signal/sources.py) — a source
     # only participates (for a strategy's EXTERNAL_SOURCES, or the manual
     # POST /api/v1/signals/sources/check) once its base_url credential is set here;
