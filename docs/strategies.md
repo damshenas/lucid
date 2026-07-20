@@ -140,12 +140,14 @@ least one stored bar (it must know a position's current price).
 
 ## External signal sources
 
-A strategy can declare `EXTERNAL_SOURCES = ["zacks", "tradingview"]` to have the
-runtime fetch normalized third-party ratings (Finviz/TradingView/Zacks/Barchart — see
-`src/modules/signal/sources.py`) before each `run()`, available via
-`context.external_signals` / `context.external_signal(name)`. A source only
-participates once its credentials are configured (`/api/v1/credentials`); check
-status with `GET /api/v1/signals/sources` or test on demand with
+A strategy can declare `EXTERNAL_SOURCES = ["finviz", "tradingview"]` to have the
+runtime fetch normalized third-party ratings before each `run()`, available via
+`context.external_signals` / `context.external_signal(name)`. Currently wired
+(`src/modules/signal/sources.py` `SOURCE_NAMES`): **finviz** and **tradingview** —
+both hit real, fixed public endpoints and need **zero credentials**. **zacks** and
+**barchart** are explicit `DISABLED` placeholders (need a headless-browser anti-bot
+bypass this repo doesn't run) and aren't in `SOURCE_NAMES` at all. Check what's
+usable with `GET /api/v1/signals/sources` or test on demand with
 `POST /api/v1/signals/sources/check`.
 
 ## Distribution via git

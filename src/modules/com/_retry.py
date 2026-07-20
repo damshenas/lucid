@@ -2,9 +2,10 @@
 
 Mirrors the manual retry loop already proven in
 ``src/modules/com/trading212/__init__.py`` (backoff formula
-``backoff_base * 2 ** (attempt - 1)``) so every screener connector
-(barchart/finviz/zacks/tradingview, via ``HttpDataProvider``) and the yfinance
-wrapper can share one retry policy instead of each reimplementing it.
+``backoff_base * 2 ** (attempt - 1)``) so every connector that makes a real network
+call (``com.finviz``/``com.tradingview`` directly; ``com.zacks``/``com.barchart``'s
+disabled placeholders don't; anything routed through ``HttpDataProvider``) and the
+yfinance wrapper can share one retry policy instead of each reimplementing it.
 
 This is a per-connector retry mechanism only (respects each service's own quota/
 rate limits) — deliberately *not* a system-wide circuit breaker.

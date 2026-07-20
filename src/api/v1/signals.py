@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.modules.db.models.user import User
 from src.modules.db.repositories.signal import SignalRepository
 from src.modules.encryption import CredentialNotConfiguredError
-from src.modules.signal.sources import SOURCE_NAMES, SignalSourceRegistry
+from src.modules.signal.sources import SOURCE_NAMES, SignalSourceRegistry, source_requires_credentials
 
 from ..deps import get_context, get_current_user, get_session
 
@@ -56,17 +56,22 @@ async def list_signal_sources(
 ) -> list[dict[str, Any]]:
     """Which external signal sources (src/modules/signal/sources.py) are usable right
     now for this user — i.e. by a strategy declaring ``EXTERNAL_SOURCES`` or by
-    ``POST /sources/check`` below. "configured" means at least a base_url credential
-    resolves (system default or the user's own, per the credential cascade —
-    src/modules/encryption/credentials.py)."""
+    ``POST /sources/check`` below. A source that needs no credentials at all (every
+    one currently wired — finviz/tradingview hit fixed public endpoints) is always
+    "configured"; one that does (``source_requires_credentials``) needs at least a
+    base_url credential to resolve (system default or the user's own, per the
+    credential cascade — src/modules/encryption/credentials.py)."""
     creds = get_context(request).credential_manager(session)
     out: list[dict[str, Any]] = []
     for name in SOURCE_NAMES:
-        try:
-            await creds.get_for_user(f"{name}_base_url", user.id)
+        if not source_requires_credentials(name):
             configured = True
-        except CredentialNotConfiguredError:
-            configured = False
+        else:
+            try:
+                await creds.get_for_user(f"{name}_base_url", user.id)
+                configured = True
+            except CredentialNotConfiguredError:
+                configured = False
         out.append({"source": name, "configured": configured})
     return out
 

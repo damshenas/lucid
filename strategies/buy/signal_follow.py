@@ -3,16 +3,20 @@
 Unlike ``trend_follow`` (SMA50/SMA200/RSI computed from Lucid's own locally-stored
 daily bars, which needs 200+ days of history before it can say anything), this
 strategy makes its buy/no-buy decision entirely from external signal providers'
-current ratings (Finviz/TradingView/Zacks/Barchart — see
-``src/modules/signal/sources.py``) and never looks at ``context.price_data`` at all.
+current ratings (Finviz/TradingView — see ``src/modules/signal/sources.py``) and
+never looks at ``context.price_data`` at all. Both wired sources hit real, fixed
+public endpoints and need no credentials at all (Zacks/Barchart exist only as
+explicit ``DISABLED`` placeholders — see ``src.modules.com.zacks``/``.barchart`` —
+since their real data needs a headless-browser anti-bot bypass this repo doesn't
+run; they are deliberately not in ``EXTERNAL_SOURCES`` below).
 
 It also does NOT use the shared price watchlist as its candidate list — unlike every
 other buy strategy, it sets ``USES_WATCHLIST = False`` so ``TradingRuntime.
 run_strategies`` (src/api/runtime.py) discovers candidate tickers directly from this
 strategy's own ``EXTERNAL_SOURCES`` (via ``SignalSourceRegistry.discover()``) instead
 of iterating any predefined list. The default ``min_buy_votes = 2`` means a ticker
-only gets acted on once at least two independent sources currently agree it's a buy —
-a single source's opinion alone is treated as inconclusive, not a signal to act on.
+only gets acted on once both wired sources currently agree it's a buy — a single
+source's opinion alone is treated as inconclusive, not a signal to act on.
 """
 
 from __future__ import annotations
@@ -21,19 +25,18 @@ from src.modules.bus import BuySignalEvent
 from src.modules.strategy.context import StrategyContext, StrategyDecision
 
 STRATEGY_NAME = "signal_follow"
-STRATEGY_VERSION = "2.0.0"
+STRATEGY_VERSION = "2.1.0"
 STRATEGY_DESCRIPTION = (
-    "Buy when at least 2 external signal providers (Finviz/TradingView/Zacks/"
-    "Barchart) currently rate a ticker 'buy' — no local price history and no "
-    "watchlist entry required; candidates are discovered directly from the "
-    "providers themselves."
+    "Buy when at least 2 external signal providers (Finviz/TradingView) currently "
+    "rate a ticker 'buy' — no local price history, no watchlist entry, and no "
+    "credentials required; candidates are discovered directly from the providers "
+    "themselves."
 )
 FEATURES = ["signals"]
-# Every currently-supported provider (src/modules/signal/sources.py SOURCE_NAMES) —
-# a source only actually participates once its credentials are configured
-# (GET /api/v1/signals/sources shows what's usable right now); an unconfigured one
-# just comes back with error="not configured" and doesn't count toward the vote.
-EXTERNAL_SOURCES = ["finviz", "tradingview", "zacks", "barchart"]
+# Every currently-wired provider (src/modules/signal/sources.py SOURCE_NAMES) — both
+# hit real public endpoints with no credentials needed at all (see their connector
+# docstrings). Zacks/Barchart are intentionally excluded (DISABLED placeholders).
+EXTERNAL_SOURCES = ["finviz", "tradingview"]
 # Candidate tickers come from EXTERNAL_SOURCES' own discovery endpoints (see
 # SignalSourceRegistry.discover), never from the shared price watchlist.
 USES_WATCHLIST = False

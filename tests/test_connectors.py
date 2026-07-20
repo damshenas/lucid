@@ -11,11 +11,13 @@ import pytest
 
 from src.modules.com._retry import with_retry
 from src.modules.com.barchart import BarchartConnector
+from src.modules.com.barchart import DisabledConnectorError as BarchartDisabledError
 from src.modules.com.claude import ClaudeClient, DisabledConnectorError
 from src.modules.com.finviz import FinvizConnector
 from src.modules.com.git import GitError, GitSync, deploy_strategies, sync_and_deploy
 from src.modules.com.telegram import TelegramClient
 from src.modules.com.tradingview import TradingViewConnector
+from src.modules.com.zacks import DisabledConnectorError as ZacksDisabledError
 from src.modules.com.zacks import ZacksConnector
 
 
@@ -23,65 +25,95 @@ def _client(handler) -> httpx.AsyncClient:
     return httpx.AsyncClient(base_url="https://provider.test", transport=httpx.MockTransport(handler))
 
 
-async def test_zacks_normalized() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"rank": 1, "name": "Strong Buy"})
+_FINVIZ_HTML = """
+<table id="screener-views-table">
+  <tr><th>Ticker</th><th>Company</th></tr>
+  <tr><td><a href="quote.ashx?t=AAPL&ty=c">AAPL</a></td><td>Apple</td></tr>
+  <tr><td><a href="quote.ashx?t=MSFT&ty=c">MSFT</a></td><td>Microsoft</td></tr>
+</table>
+"""
 
-    connector = ZacksConnector("https://provider.test", client=_client(handler))
-    result = await connector.fetch_rank("AAPL")
-    assert result == {"source": "zacks", "ticker": "AAPL", "rank": 1, "raw": {"rank": 1, "name": "Strong Buy"}}
+
+async def test_finviz_scrapes_tickers_from_screener_pages() -> None:
+    """No API key/base_url — direct scrape of Finviz's real public screener pages,
+    extracting tickers via their stable ``quote.ashx?t=TICKER`` link pattern
+    (mirrors the legacy dealer app's target screens, simplified to just tickers)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=_FINVIZ_HTML)
+
+    connector = FinvizConnector(client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    screener = await connector.fetch_screener()
+    tickers = {item["ticker"] for item in screener}
+    assert tickers == {"AAPL", "MSFT"}
+    assert all(item["metrics"]["recommendation"] == "buy" for item in screener)
+
+    # Per-ticker convenience lookup reuses the same scrape.
+    match = await connector.fetch_metrics("aapl")
+    assert match["ticker"] == "AAPL"
+    assert match["metrics"]["recommendation"] == "buy"
+
+    no_match = await connector.fetch_metrics("ZZZZ")
+    assert no_match == {"source": "finviz", "ticker": "ZZZZ", "metrics": {}, "raw": None}
+
     await connector.aclose()
 
 
-async def test_other_connectors_shape() -> None:
+async def test_finviz_one_screen_failing_does_not_block_others() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"metrics": {}, "opinion": "buy", "recommendation": "strong_buy"})
+        if "ta_topgainers" in str(request.url):
+            return httpx.Response(500)
+        return httpx.Response(200, text=_FINVIZ_HTML)
 
-    finviz = FinvizConnector("https://provider.test", client=_client(handler))
-    barchart = BarchartConnector("https://provider.test", client=_client(handler))
-    tv = TradingViewConnector("https://provider.test", client=_client(handler))
-
-    assert (await finviz.fetch_metrics("AAPL"))["source"] == "finviz"
-    assert (await barchart.fetch_opinion("AAPL"))["opinion"] == "buy"
-    assert (await tv.fetch_technicals("AAPL"))["recommendation"] == "strong_buy"
-
-    for c in (finviz, barchart, tv):
-        await c.aclose()
+    connector = FinvizConnector(client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    screener = await connector.fetch_screener()
+    assert {item["ticker"] for item in screener} == {"AAPL", "MSFT"}
+    await connector.aclose()
 
 
-async def test_connectors_discovery_methods_return_one_item_per_ticker() -> None:
-    """Each connector's bulk 'discover every currently-rated ticker' method (used by
-    a buy strategy with USES_WATCHLIST = False, e.g. strategies/buy/signal_follow.py)
-    returns items shaped exactly like its single-ticker fetch method's result."""
+async def test_tradingview_scanner_parses_response() -> None:
+    """No API key/base_url — POSTs directly to TradingView's real public scanner
+    endpoint (mirrors the legacy dealer app's ``_fetch_scanner``)."""
 
-    def zacks_handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/ranks"
-        return httpx.Response(200, json={"items": [{"ticker": "AAPL", "rank": 1}]})
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert str(request.url) == "https://scanner.tradingview.com/america/scan"
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"d": ["NASDAQ:AAPL", 150.0, 1.2, 900000, 0.5, 60.0]},
+                    {"d": ["NYSE:GE", 100.0, 0.1, 600000, None, None]},
+                ]
+            },
+        )
 
-    def finviz_handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/screener"
-        return httpx.Response(200, json={"items": [{"ticker": "MSFT", "metrics": {"recommendation": "buy"}}]})
+    connector = TradingViewConnector(client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    results = await connector.fetch_all_technicals()
+    by_ticker = {r["ticker"]: r for r in results}
+    assert by_ticker["AAPL"]["recommendation"] == 0.5
+    assert by_ticker["GE"]["recommendation"] is None
 
-    def tv_handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/technicals"
-        return httpx.Response(200, json={"items": [{"ticker": "NVDA", "recommendation": "strong_buy"}]})
+    match = await connector.fetch_technicals("aapl")
+    assert match["recommendation"] == 0.5
 
-    def barchart_handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/opinions"
-        return httpx.Response(200, json={"items": [{"ticker": "TSLA", "opinion": "sell"}]})
+    no_match = await connector.fetch_technicals("ZZZZ")
+    assert no_match == {"source": "tradingview", "ticker": "ZZZZ", "recommendation": None, "raw": None}
 
-    zacks = ZacksConnector("https://provider.test", client=_client(zacks_handler))
-    finviz = FinvizConnector("https://provider.test", client=_client(finviz_handler))
-    tv = TradingViewConnector("https://provider.test", client=_client(tv_handler))
-    barchart = BarchartConnector("https://provider.test", client=_client(barchart_handler))
+    await connector.aclose()
 
-    assert await zacks.fetch_ranks() == [{"source": "zacks", "ticker": "AAPL", "rank": 1, "raw": {"ticker": "AAPL", "rank": 1}}]
-    assert (await finviz.fetch_screener())[0]["ticker"] == "MSFT"
-    assert (await tv.fetch_all_technicals())[0]["recommendation"] == "strong_buy"
-    assert (await barchart.fetch_all_opinions())[0]["opinion"] == "sell"
 
-    for c in (zacks, finviz, tv, barchart):
-        await c.aclose()
+async def test_zacks_and_barchart_are_disabled_placeholders() -> None:
+    """Their real data needs a headless-browser anti-bot bypass this repo doesn't
+    run — both are explicit DISABLED placeholders, same pattern as telegram/claude."""
+    with pytest.raises(ZacksDisabledError):
+        await ZacksConnector().fetch_rank("AAPL")
+    with pytest.raises(ZacksDisabledError):
+        await ZacksConnector().fetch_ranks()
+    with pytest.raises(BarchartDisabledError):
+        await BarchartConnector().fetch_opinion("AAPL")
+    with pytest.raises(BarchartDisabledError):
+        await BarchartConnector().fetch_all_opinions()
 
 
 
@@ -127,43 +159,35 @@ async def test_with_retry_does_not_retry_non_retryable_exceptions() -> None:
     assert calls == 1
 
 
-async def test_zacks_retries_on_429_then_succeeds() -> None:
+async def test_finviz_retries_transient_transport_errors_then_succeeds() -> None:
     calls = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal calls
         calls += 1
         if calls == 1:
-            return httpx.Response(429, json={})
-        return httpx.Response(200, json={"rank": 2, "name": "Buy"})
+            raise httpx.ConnectError("boom", request=request)
+        return httpx.Response(200, text=_FINVIZ_HTML)
 
-    connector = ZacksConnector(
-        "https://provider.test",
-        client=httpx.AsyncClient(
-            base_url="https://provider.test",
-            transport=httpx.MockTransport(handler),
-        ),
-    )
-    connector._provider._backoff_base = 0.001  # keep the test fast
-    result = await connector.fetch_rank("AAPL")
-    assert result["rank"] == 2
-    assert calls == 2
+    connector = FinvizConnector(client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    screener = await connector.fetch_screener()
+    assert {item["ticker"] for item in screener} == {"AAPL", "MSFT"}
+    assert calls >= 2
     await connector.aclose()
 
 
-async def test_zacks_does_not_retry_on_404() -> None:
+async def test_tradingview_does_not_retry_on_persistent_error() -> None:
     calls = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal calls
         calls += 1
-        return httpx.Response(404, json={})
+        return httpx.Response(500)
 
-    connector = ZacksConnector("https://provider.test", client=_client(handler))
-    connector._provider._backoff_base = 0.001
+    connector = TradingViewConnector(client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
     with pytest.raises(httpx.HTTPStatusError):
-        await connector.fetch_rank("AAPL")
-    assert calls == 1
+        await connector.fetch_all_technicals()
+    assert calls == 1  # a plain 500 (not a transport/timeout error) isn't retried
     await connector.aclose()
 
 

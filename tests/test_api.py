@@ -118,7 +118,7 @@ def test_signal_follow_discovers_candidates_without_watchlist_or_price_bars(
     async def fake_discover(self, sources):
         return [
             ExternalSignal(source="finviz", ticker="NFLX", direction="buy"),
-            ExternalSignal(source="zacks", ticker="NFLX", direction="buy"),
+            ExternalSignal(source="tradingview", ticker="NFLX", direction="buy"),
         ]
 
     monkeypatch.setattr(SignalSourceRegistry, "discover", fake_discover)
@@ -153,6 +153,19 @@ def test_signal_follow_discovers_candidates_without_watchlist_or_price_bars(
     assert len(decisions) == 1
     assert decisions[0]["ticker"] == "NFLX"
     assert decisions[0]["acted"] is True
+
+
+def test_signal_sources_credential_free_always_configured(client: TestClient) -> None:
+    """finviz/tradingview hit fixed public endpoints and need zero credentials —
+    GET /api/v1/signals/sources must report both as configured even though nothing
+    was ever set via /api/v1/credentials."""
+    token = client.post(
+        "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
+    ).json()["access_token"]
+    resp = client.get("/api/v1/signals/sources", headers=_auth(token))
+    assert resp.status_code == 200
+    sources = {row["source"]: row["configured"] for row in resp.json()}
+    assert sources == {"finviz": True, "tradingview": True}
 
 
 def test_save_secret_rejected(client: TestClient) -> None:

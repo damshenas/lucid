@@ -106,11 +106,35 @@ class _FailingConnector(_FakeConnector):
         raise RuntimeError("boom")
 
 
-async def test_source_not_configured_returns_error_not_raise(session: AsyncSession) -> None:
+def _fake_direction(raw: dict) -> str | None:
+    # Mirrors the old Zacks-rank mapping (1/2=buy, 3=hold, 4/5=sell) — just a stand-in
+    # normalization function so these tests don't depend on any real connector.
+    rank = raw.get("rank")
+    if rank in (1, 2):
+        return "buy"
+    if rank in (4, 5):
+        return "sell"
+    return "hold" if rank == 3 else None
+
+
+# A fake *credentialed* source (requires_credentials=True) — every currently-wired
+# real source (finviz/tradingview) needs zero credentials, but the registry must
+# still correctly gate a source that does, for any future authenticated source.
+_FAKE_SOURCE_NAME = "acme"
+
+
+async def test_source_not_configured_returns_error_not_raise(session: AsyncSession, monkeypatch) -> None:
+    monkeypatch.setitem(
+        sources_module._SOURCES,
+        _FAKE_SOURCE_NAME,
+        _Source(_FakeConnector, "fetch_rank", _fake_direction, "fetch_ranks", requires_credentials=True),
+    )
     mgr = CredentialManager(session, _encryptor())
     registry = SignalSourceRegistry(mgr, user_id=None)
-    results = await registry.fetch("AAPL", ["zacks"])
-    assert results == [ExternalSignal(source="zacks", ticker="AAPL", direction=None, error="not configured")]
+    results = await registry.fetch("AAPL", [_FAKE_SOURCE_NAME])
+    assert results == [
+        ExternalSignal(source=_FAKE_SOURCE_NAME, ticker="AAPL", direction=None, error="not configured")
+    ]
 
 
 async def test_source_normalizes_rating_once_configured(
@@ -118,29 +142,29 @@ async def test_source_normalizes_rating_once_configured(
 ) -> None:
     monkeypatch.setitem(
         sources_module._SOURCES,
-        "zacks",
-        _Source(_FakeConnector, "fetch_rank", sources_module._zacks_direction, "fetch_ranks"),
+        _FAKE_SOURCE_NAME,
+        _Source(_FakeConnector, "fetch_rank", _fake_direction, "fetch_ranks", requires_credentials=True),
     )
     mgr = CredentialManager(session, _encryptor())
-    await mgr.set_for_user("zacks_base_url", "https://zacks.test", user_id=None)
+    await mgr.set_for_user(f"{_FAKE_SOURCE_NAME}_base_url", "https://acme.test", user_id=None)
 
-    result = (await SignalSourceRegistry(mgr, user_id=None).fetch("AAPL", ["zacks"]))[0]
+    result = (await SignalSourceRegistry(mgr, user_id=None).fetch("AAPL", [_FAKE_SOURCE_NAME]))[0]
 
     assert result == ExternalSignal(
-        source="zacks", ticker="AAPL", direction="buy", raw={"rank": 1, "ticker": "AAPL"}
+        source=_FAKE_SOURCE_NAME, ticker="AAPL", direction="buy", raw={"rank": 1, "ticker": "AAPL"}
     )
 
 
 async def test_source_error_is_captured_not_raised(session: AsyncSession, monkeypatch) -> None:
     monkeypatch.setitem(
         sources_module._SOURCES,
-        "zacks",
-        _Source(_FailingConnector, "fetch_rank", sources_module._zacks_direction, "fetch_ranks"),
+        _FAKE_SOURCE_NAME,
+        _Source(_FailingConnector, "fetch_rank", _fake_direction, "fetch_ranks", requires_credentials=True),
     )
     mgr = CredentialManager(session, _encryptor())
-    await mgr.set_for_user("zacks_base_url", "https://zacks.test", user_id=None)
+    await mgr.set_for_user(f"{_FAKE_SOURCE_NAME}_base_url", "https://acme.test", user_id=None)
 
-    result = (await SignalSourceRegistry(mgr, user_id=None).fetch("AAPL", ["zacks"]))[0]
+    result = (await SignalSourceRegistry(mgr, user_id=None).fetch("AAPL", [_FAKE_SOURCE_NAME]))[0]
 
     assert result.direction is None
     assert result.error == "boom"
@@ -154,23 +178,32 @@ async def test_registry_discover_aggregates_every_source_ticker(
     normalized the same way fetch() would per-ticker."""
     monkeypatch.setitem(
         sources_module._SOURCES,
-        "zacks",
-        _Source(_FakeConnector, "fetch_rank", sources_module._zacks_direction, "fetch_ranks"),
+        _FAKE_SOURCE_NAME,
+        _Source(_FakeConnector, "fetch_rank", _fake_direction, "fetch_ranks", requires_credentials=True),
     )
     mgr = CredentialManager(session, _encryptor())
-    await mgr.set_for_user("zacks_base_url", "https://zacks.test", user_id=None)
+    await mgr.set_for_user(f"{_FAKE_SOURCE_NAME}_base_url", "https://acme.test", user_id=None)
 
-    results = await SignalSourceRegistry(mgr, user_id=None).discover(["zacks"])
+    results = await SignalSourceRegistry(mgr, user_id=None).discover([_FAKE_SOURCE_NAME])
 
     assert results == [
-        ExternalSignal(source="zacks", ticker="AAPL", direction="buy", raw={"rank": 1, "ticker": "AAPL"}),
-        ExternalSignal(source="zacks", ticker="TSLA", direction="sell", raw={"rank": 4, "ticker": "TSLA"}),
+        ExternalSignal(
+            source=_FAKE_SOURCE_NAME, ticker="AAPL", direction="buy", raw={"rank": 1, "ticker": "AAPL"}
+        ),
+        ExternalSignal(
+            source=_FAKE_SOURCE_NAME, ticker="TSLA", direction="sell", raw={"rank": 4, "ticker": "TSLA"}
+        ),
     ]
 
 
-async def test_registry_discover_skips_unconfigured_source(session: AsyncSession) -> None:
+async def test_registry_discover_skips_unconfigured_source(session: AsyncSession, monkeypatch) -> None:
+    monkeypatch.setitem(
+        sources_module._SOURCES,
+        _FAKE_SOURCE_NAME,
+        _Source(_FakeConnector, "fetch_rank", _fake_direction, "fetch_ranks", requires_credentials=True),
+    )
     mgr = CredentialManager(session, _encryptor())
-    assert await SignalSourceRegistry(mgr, user_id=None).discover(["zacks"]) == []
+    assert await SignalSourceRegistry(mgr, user_id=None).discover([_FAKE_SOURCE_NAME]) == []
 
 
 async def test_registry_discover_swallows_connector_failure(
@@ -178,13 +211,13 @@ async def test_registry_discover_swallows_connector_failure(
 ) -> None:
     monkeypatch.setitem(
         sources_module._SOURCES,
-        "zacks",
-        _Source(_FailingConnector, "fetch_rank", sources_module._zacks_direction, "fetch_ranks"),
+        _FAKE_SOURCE_NAME,
+        _Source(_FailingConnector, "fetch_rank", _fake_direction, "fetch_ranks", requires_credentials=True),
     )
     mgr = CredentialManager(session, _encryptor())
-    await mgr.set_for_user("zacks_base_url", "https://zacks.test", user_id=None)
+    await mgr.set_for_user(f"{_FAKE_SOURCE_NAME}_base_url", "https://acme.test", user_id=None)
 
-    assert await SignalSourceRegistry(mgr, user_id=None).discover(["zacks"]) == []
+    assert await SignalSourceRegistry(mgr, user_id=None).discover([_FAKE_SOURCE_NAME]) == []
 
 
 def test_direction_from_rating_parses_text_and_numeric() -> None:
@@ -199,11 +232,10 @@ def test_direction_from_rating_parses_text_and_numeric() -> None:
     assert parse("unrelated text") is None
 
 
-def test_zacks_direction_maps_rank_to_buy_sell_hold() -> None:
-    parse = sources_module._zacks_direction
-    assert parse({"rank": 1}) == "buy"
-    assert parse({"rank": 2}) == "buy"
-    assert parse({"rank": 3}) == "hold"
-    assert parse({"rank": 4}) == "sell"
-    assert parse({"rank": 5}) == "sell"
-    assert parse({"rank": None}) is None
+def test_fake_source_direction_maps_rank_to_buy_sell_hold() -> None:
+    assert _fake_direction({"rank": 1}) == "buy"
+    assert _fake_direction({"rank": 2}) == "buy"
+    assert _fake_direction({"rank": 3}) == "hold"
+    assert _fake_direction({"rank": 4}) == "sell"
+    assert _fake_direction({"rank": 5}) == "sell"
+    assert _fake_direction({"rank": None}) is None

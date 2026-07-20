@@ -168,16 +168,15 @@ async def test_trailing_stop_widens_via_bear_regime() -> None:
 async def test_signal_follow_buys_without_any_price_data() -> None:
     """The whole point of signal_follow: it must be able to act with
     price_data=None (no locally-stored bars at all) — unlike trend_follow it never
-    reads context.price_data. Default min_buy_votes=2, so this needs 2 agreeing
-    sources, not just 1."""
+    reads context.price_data. Default min_buy_votes=2, so both of its two wired
+    sources (finviz, tradingview) must agree."""
     strat = _LOADED["signal_follow"]
     ctx = StrategyContext(
         ticker="NFLX", user_id=1, asset_class="equity",
         price_data=None,
         external_signals=[
             ExternalSignal(source="finviz", ticker="NFLX", direction="buy"),
-            ExternalSignal(source="zacks", ticker="NFLX", direction="buy"),
-            ExternalSignal(source="barchart", ticker="NFLX", direction="hold"),
+            ExternalSignal(source="tradingview", ticker="NFLX", direction="buy"),
         ],
     )
     decision = await strat.run(ctx)
@@ -185,17 +184,16 @@ async def test_signal_follow_buys_without_any_price_data() -> None:
     assert decision.event is not None
     assert decision.event.ticker == "NFLX"
     assert decision.event.source == "signal_follow"
-    assert decision.event.confidence == 2 / 3  # 2 of 3 answered sources voted buy
+    assert decision.event.confidence == 1.0  # 2 of 2 answered sources voted buy
 
 
 async def test_signal_follow_holds_below_vote_threshold() -> None:
     strat = _LOADED["signal_follow"]
     ctx = StrategyContext(
         ticker="NFLX", user_id=1, asset_class="equity",
-        config={"strategy": {"signal_follow": {"min_buy_votes": 2}}},
         external_signals=[
             ExternalSignal(source="finviz", ticker="NFLX", direction="buy"),
-            ExternalSignal(source="zacks", ticker="NFLX", direction="sell"),
+            ExternalSignal(source="tradingview", ticker="NFLX", direction="sell"),
         ],
     )
     decision = await strat.run(ctx)

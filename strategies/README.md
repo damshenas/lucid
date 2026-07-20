@@ -237,41 +237,47 @@ backfill action) — the daily/intraday scheduled jobs only keep already-known t
 
 ## 9. External signal sources (optional)
 
-If your strategy wants a third-party opinion (Finviz/TradingView/Zacks/Barchart — see
-`src/modules/signal/sources.py`) in addition to (or, like `signal_follow`, entirely
-instead of) your own price-based logic, declare it:
+If your strategy wants a third-party opinion in addition to (or, like
+`signal_follow`, entirely instead of) your own price-based logic, declare it:
 
 ```python
-EXTERNAL_SOURCES = ["zacks", "tradingview"]
+EXTERNAL_SOURCES = ["finviz", "tradingview"]
 ```
+
+Currently wired sources (`src/modules/signal/sources.py` `SOURCE_NAMES`): **finviz**
+and **tradingview** — both hit real, fixed public endpoints (a screener page, a
+scanner API) and need **zero credentials** (see their connector docstrings in
+`src/modules/com/finviz`/`.tradingview`). **zacks** and **barchart** exist only as
+explicit `DISABLED` placeholders (`src/modules/com/zacks`/`.barchart`, same pattern as
+`com/telegram`/`.claude`) since their real data needs a headless-browser anti-bot
+bypass this repo doesn't run — don't declare them in `EXTERNAL_SOURCES`, they aren't
+in `SOURCE_NAMES` at all.
 
 The runtime fetches those sources for you before calling `run()` and hands you the
 normalized results:
 
 ```python
 async def run(context: StrategyContext) -> StrategyDecision:
-    zacks = context.external_signal("zacks")           # ExternalSignal | None
-    if zacks is not None and zacks.direction == "buy":
+    finviz = context.external_signal("finviz")           # ExternalSignal | None
+    if finviz is not None and finviz.direction == "buy":
         ...
 ```
 
 `ExternalSignal` has `source`, `ticker`, `direction` (`"buy" | "sell" | "hold" | None`),
-`raw` (the provider's own response shape), and `error` (set when the source failed or
-isn't configured — treat that the same as "no opinion", never raise). A source only
-participates once an admin/trader has configured its credentials via
-`/api/v1/credentials` (`<source>_base_url`, optionally `<source>_api_key`) — check
-what's currently usable with `GET /api/v1/signals/sources`, and test one ticker
-on-demand with `POST /api/v1/signals/sources/check` (body: `{"ticker": "AAPL",
-"sources": ["zacks"]}`) without waiting for a scheduled strategy run. Omitting
-`EXTERNAL_SOURCES` (the default) means zero extra network calls on your strategy's
-behalf.
+`raw` (the provider's own response shape), and `error` (set when the source failed —
+treat that the same as "no opinion", never raise). Check what's currently usable with
+`GET /api/v1/signals/sources` (credential-free sources always report `configured:
+true`), and test one ticker on-demand with `POST /api/v1/signals/sources/check`
+(body: `{"ticker": "AAPL", "sources": ["finviz"]}`) without waiting for a scheduled
+strategy run. Omitting `EXTERNAL_SOURCES` (the default) means zero extra network
+calls on your strategy's behalf.
 
 If your buy strategy also sets `USES_WATCHLIST = False` (see section 7), the runtime
 calls each declared source's *bulk* discovery method instead
-(`SignalSourceRegistry.discover()` → each connector's `fetch_screener`/`fetch_ranks`/
-`fetch_all_technicals`/`fetch_all_opinions`) to get every ticker that source currently
-has an opinion on, in one call — not one call per ticker. `run()` is then invoked once
-per discovered ticker with that ticker's signals already populated in
+(`SignalSourceRegistry.discover()` → `FinvizConnector.fetch_screener`/
+`TradingViewConnector.fetch_all_technicals`) to get every ticker that source
+currently has an opinion on, in one call — not one call per ticker. `run()` is then
+invoked once per discovered ticker with that ticker's signals already populated in
 `context.external_signals`; there's no separate per-ticker fetch in this mode.
 
 ## 10. Activation

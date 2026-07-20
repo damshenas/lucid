@@ -1,55 +1,38 @@
-"""Zacks connector. Returns a normalized rank/rating for a ticker.
+"""Zacks connector — DISABLED placeholder.
 
-Endpoint paths are provider-specific and configured via ``base_url``; the normalization
-contract (the returned dict shape) is what the rest of Lucid depends on.
+The legacy ``dealer`` app's real Zacks Rank data (``integration/web/zacks.py``)
+requires scraping zacks.com from behind Cloudflare/Incapsula anti-bot protection —
+reliably only via a headless browser (Playwright), which this repo doesn't run (see
+finviz/tradingview for the two sources that don't need one). Calls raise
+``DisabledConnectorError`` until that's added and this is re-enabled.
 """
 
 from __future__ import annotations
 
-from typing import Any
+DISABLED = True
+REQUIRED_CONFIG: list[str] = []
+OPTIONAL_CONFIG: dict[str, object] = {}
 
-import httpx
 
-from .._provider import HttpDataProvider
-
-REQUIRED_CONFIG = ["base_url"]
-OPTIONAL_CONFIG = {"api_key": None, "timeout_seconds": 10.0}
+class DisabledConnectorError(RuntimeError):
+    pass
 
 
 class ZacksConnector:
+    enabled = False
     source = "zacks"
 
-    def __init__(
-        self,
-        base_url: str,
-        *,
-        api_key: str | None = None,
-        timeout_seconds: float = 10.0,
-        client: httpx.AsyncClient | None = None,
-    ) -> None:
-        self._provider = HttpDataProvider(
-            self.source, base_url, api_key=api_key, timeout_seconds=timeout_seconds, client=client
-        )
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        pass
 
-    async def fetch_rank(self, ticker: str) -> dict[str, Any]:
-        raw = await self._provider.get_json(f"/rank/{ticker}")
-        return {"source": self.source, "ticker": ticker, "rank": raw.get("rank"), "raw": raw}
+    async def fetch_rank(self, ticker: str) -> dict[str, object]:
+        raise DisabledConnectorError("zacks connector is disabled (needs a headless browser)")
 
-    async def fetch_ranks(self) -> list[dict[str, Any]]:
-        """Every ticker Zacks currently has a rank for — used for candidate
-        *discovery* (no predefined ticker list required), unlike ``fetch_rank``
-        above which needs a ticker already in hand. Expects ``GET {base_url}/ranks``
-        -> ``{"items": [{"ticker": ..., "rank": ...}, ...]}``, one item per ranked
-        ticker, each shaped like a single ``fetch_rank`` result."""
-        raw = await self._provider.get_json("/ranks")
-        return [
-            {"source": self.source, "ticker": item["ticker"], "rank": item.get("rank"), "raw": item}
-            for item in raw.get("items", [])
-            if item.get("ticker")
-        ]
+    async def fetch_ranks(self) -> list[dict[str, object]]:
+        raise DisabledConnectorError("zacks connector is disabled (needs a headless browser)")
 
     async def aclose(self) -> None:
-        await self._provider.aclose()
+        pass
 
 
-__all__ = ["OPTIONAL_CONFIG", "REQUIRED_CONFIG", "ZacksConnector"]
+__all__ = ["DISABLED", "DisabledConnectorError", "OPTIONAL_CONFIG", "REQUIRED_CONFIG", "ZacksConnector"]

@@ -1,19 +1,26 @@
 """External signal-source connectors, normalized behind one interface.
 
-Wraps the HTTP connectors in ``src.modules.com`` (finviz/tradingview/zacks/barchart) —
-each is a thin, provider-specific client returning that provider's own shape (see
-their docstrings); this module is what turns "what does Zacks think about AMZN?" into
-one common ``ExternalSignal`` strategies (via ``StrategyContext.external_signals``,
-see ``src/api/runtime.py``) and the manual check endpoint
-(``POST /api/v1/signals/sources/check``) can consume without caring which provider
-answered.
+Wraps the HTTP connectors in ``src.modules.com`` — each is a thin, provider-specific
+client returning that provider's own shape (see their docstrings); this module is
+what turns "what does Finviz think about AMZN?" into one common ``ExternalSignal``
+strategies (via ``StrategyContext.external_signals``, see ``src/api/runtime.py``) and
+the manual check endpoint (``POST /api/v1/signals/sources/check``) can consume
+without caring which provider answered.
 
-A source only ever participates once its credentials are configured via
-``/api/v1/credentials`` — ``<source>_base_url`` (required) and, optionally,
-``<source>_api_key`` — exactly like every other platform credential (see
-``src.modules.encryption.credentials``). With nothing configured, ``fetch`` returns a
-"not configured" ``ExternalSignal`` per requested source rather than raising, so a
-strategy (or the check endpoint) never has to special-case a missing integration.
+Currently wired sources: **finviz** and **tradingview** — both hit real, fixed public
+endpoints (a screener page, a scanner API) and need no credentials at all (see their
+connector docstrings). **zacks** and **barchart** exist only as ``DISABLED``
+placeholders (``src.modules.com.zacks``/``.barchart``) since their real data requires
+a headless-browser anti-bot bypass this repo doesn't run — they are intentionally
+absent from ``_SOURCES``/``SOURCE_NAMES`` below, not merely "unconfigured".
+
+A source that *does* declare ``requires_credentials=True`` only participates once its
+credentials are configured via ``/api/v1/credentials`` (``<source>_base_url``,
+optionally ``<source>_api_key``) — with nothing configured, ``fetch``/``discover``
+return a "not configured" result for it rather than raising, so a strategy (or the
+check endpoint) never has to special-case a missing integration. No currently-wired
+source actually requires this today, but the mechanism stays in place for a future
+paid/authenticated source.
 
 Nothing here is called automatically for every strategy — only strategies that
 declare interest via an optional module-level ``EXTERNAL_SOURCES: list[str]`` (mirrors
@@ -27,10 +34,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from src.modules.com.barchart import BarchartConnector
 from src.modules.com.finviz import FinvizConnector
 from src.modules.com.tradingview import TradingViewConnector
-from src.modules.com.zacks import ZacksConnector
 from src.modules.encryption import CredentialNotConfiguredError
 from src.modules.logger import get_logger
 
@@ -77,21 +82,6 @@ def _direction_from_rating(value: Any) -> str | None:
     return None
 
 
-def _zacks_direction(raw: dict[str, Any]) -> str | None:
-    # Zacks Rank: 1=Strong Buy, 2=Buy, 3=Hold, 4=Sell, 5=Strong Sell.
-    try:
-        rank = int(raw.get("rank"))
-    except (TypeError, ValueError):
-        return None
-    if rank in (1, 2):
-        return "buy"
-    if rank in (4, 5):
-        return "sell"
-    if rank == 3:
-        return "hold"
-    return None
-
-
 DirectionFn = Callable[[dict[str, Any]], "str | None"]
 
 
@@ -106,21 +96,19 @@ class _Source:
     # raw dicts shaped exactly like fetch_method's single-ticker result (each
     # including its own "ticker" key), so `to_direction` is reused unchanged.
     discover_method: str
+    # Whether this source needs <name>_base_url/_api_key credentials at all before
+    # it can be used. False for every currently-wired source (finviz/tradingview hit
+    # fixed public endpoints, no auth) — kept as a per-source flag rather than a
+    # blanket assumption so a future authenticated/paid source can opt back in.
+    requires_credentials: bool = False
 
 
 _SOURCES: dict[str, _Source] = {
-    "zacks": _Source(ZacksConnector, "fetch_rank", _zacks_direction, "fetch_ranks"),
     "tradingview": _Source(
         TradingViewConnector,
         "fetch_technicals",
         lambda r: _direction_from_rating(r.get("recommendation")),
         "fetch_all_technicals",
-    ),
-    "barchart": _Source(
-        BarchartConnector,
-        "fetch_opinion",
-        lambda r: _direction_from_rating(r.get("opinion")),
-        "fetch_all_opinions",
     ),
     "finviz": _Source(
         FinvizConnector,
@@ -133,10 +121,18 @@ _SOURCES: dict[str, _Source] = {
 SOURCE_NAMES: tuple[str, ...] = tuple(_SOURCES.keys())
 
 
+def source_requires_credentials(name: str) -> bool:
+    """Whether ``name`` needs ``<name>_base_url``/``_api_key`` configured before it's
+    usable — used by ``GET /api/v1/signals/sources`` so a credential-free source
+    (every one currently wired) is correctly reported as always "configured"."""
+    source = _SOURCES.get(name)
+    return source.requires_credentials if source is not None else True
+
+
 class SignalSourceRegistry:
-    """Resolves per-source credentials and calls the requested connectors for one
-    ticker. ``user_id=None`` resolves system-default credentials only (matches
-    ``CredentialManager``'s cascade)."""
+    """Resolves per-source credentials (only for sources that need any) and calls
+    the requested connectors for one ticker. ``user_id=None`` resolves
+    system-default credentials only (matches ``CredentialManager``'s cascade)."""
 
     def __init__(self, credentials: CredentialManager, *, user_id: int | None = None) -> None:
         self._credentials = credentials
@@ -159,20 +155,25 @@ class SignalSourceRegistry:
             results.extend(await self._discover_one(name))
         return results
 
-    async def _discover_one(self, name: str) -> list[ExternalSignal]:
-        source = _SOURCES[name]
-        try:
-            base_url = await self._credentials.get_for_user(f"{name}_base_url", self._user_id)
-        except CredentialNotConfiguredError:
-            return []
-
+    async def _build_connector(self, name: str, source: _Source) -> Any:
+        """Raises ``CredentialNotConfiguredError`` only for a source that actually
+        needs credentials and doesn't have them yet."""
+        if not source.requires_credentials:
+            return source.connector_cls()
+        base_url = await self._credentials.get_for_user(f"{name}_base_url", self._user_id)
         api_key: str | None = None
         try:
             api_key = await self._credentials.get_for_user(f"{name}_api_key", self._user_id)
         except CredentialNotConfiguredError:
-            pass  # optional for every current source
+            pass  # optional even for a credentialed source
+        return source.connector_cls(base_url, api_key=api_key)
 
-        connector = source.connector_cls(base_url, api_key=api_key)
+    async def _discover_one(self, name: str) -> list[ExternalSignal]:
+        source = _SOURCES[name]
+        try:
+            connector = await self._build_connector(name, source)
+        except CredentialNotConfiguredError:
+            return []
         try:
             raw_items = await getattr(connector, source.discover_method)()
             return [
@@ -190,17 +191,9 @@ class SignalSourceRegistry:
     async def _fetch_one(self, name: str, ticker: str) -> ExternalSignal:
         source = _SOURCES[name]
         try:
-            base_url = await self._credentials.get_for_user(f"{name}_base_url", self._user_id)
+            connector = await self._build_connector(name, source)
         except CredentialNotConfiguredError:
             return ExternalSignal(source=name, ticker=ticker, direction=None, error="not configured")
-
-        api_key: str | None = None
-        try:
-            api_key = await self._credentials.get_for_user(f"{name}_api_key", self._user_id)
-        except CredentialNotConfiguredError:
-            pass  # optional for every current source
-
-        connector = source.connector_cls(base_url, api_key=api_key)
         try:
             raw = await getattr(connector, source.fetch_method)(ticker)
             return ExternalSignal(source=name, ticker=ticker, direction=source.to_direction(raw), raw=raw)
@@ -211,4 +204,4 @@ class SignalSourceRegistry:
             await connector.aclose()
 
 
-__all__ = ["SOURCE_NAMES", "ExternalSignal", "SignalSourceRegistry"]
+__all__ = ["SOURCE_NAMES", "ExternalSignal", "SignalSourceRegistry", "source_requires_credentials"]

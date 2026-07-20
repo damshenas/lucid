@@ -66,7 +66,7 @@ scheduler.run_strategies (sell: per trader's open positions · buy: per watchlis
 | `strategy` | Context, single-file loader, registry service |
 | `health` | Liveness/readiness probes (silent in logs) |
 | `netbind` | Outbound NIC binding (VPN bypass prevention) |
-| `com/*` | External connectors (trading212, yahoo, zacks, …) |
+| `com/*` | External connectors (trading212, yahoo, finviz, tradingview, …) |
 
 ## Algorithm git sync
 
