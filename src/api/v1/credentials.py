@@ -43,10 +43,26 @@ CREDENTIAL_CATALOG: list[dict[str, Any]] = [
     # (see Trading212Client). Which account it hits is chosen via the "Paper mode"
     # toggle (broker.paper_mode), not a user-supplied base URL — see
     # src/modules/com/trading212 DEMO_BASE_URL / LIVE_BASE_URL.
+    {
+        "key": "finnhub_api_key",
+        "label": "API Key",
+        "platform": "Finnhub",
+        "secret": True,
+    },
+    {
+        "key": "fmp_api_key",
+        "label": "API Key",
+        "platform": "Financial Modeling Prep",
+        "secret": True,
+    },
+    # finnhub/fmp are fixed public REST APIs (src/modules/com/finnhub, .fmp) — only
+    # the API key is user-specific, no configurable base URL. "fmp_api_key" is
+    # shared by both the "fmp_rating" and "fmp_grades" signal sources (same FMP
+    # account), see _Source.credential_prefix in src/modules/signal/sources.py.
     #
-    # External signal-source connectors (src/modules/signal/sources.py) have no
-    # entries here: finviz/tradingview hit fixed public endpoints and need zero
-    # credentials (see their connector docstrings); zacks/barchart are disabled
+    # External signal-source connectors (src/modules/signal/sources.py) otherwise
+    # have no entries here: finviz/tradingview hit fixed public endpoints and need
+    # zero credentials (see their connector docstrings); zacks/barchart are disabled
     # placeholders (src.modules.com.zacks/.barchart) with nothing to configure.
 ]
 _KNOWN_KEYS = {item["key"] for item in CREDENTIAL_CATALOG}

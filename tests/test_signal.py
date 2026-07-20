@@ -12,6 +12,7 @@ from src.modules.db.repositories.user import UserRepository
 from src.modules.encryption import CredentialManager, Encryptor, generate_key
 from src.modules.signal import SignalService
 from src.modules.signal import sources as sources_module
+from src.modules.signal.rating import direction_from_rating, rating_from_score, rating_from_text
 from src.modules.signal.sources import ExternalSignal, SignalSourceRegistry, _Source
 
 
@@ -106,15 +107,10 @@ class _FailingConnector(_FakeConnector):
         raise RuntimeError("boom")
 
 
-def _fake_direction(raw: dict) -> str | None:
-    # Mirrors the old Zacks-rank mapping (1/2=buy, 3=hold, 4/5=sell) — just a stand-in
+def _fake_rating(raw: dict) -> str | None:
+    # Mirrors Zacks Rank's own 1(Strong Buy)-5(Strong Sell) scale — just a stand-in
     # normalization function so these tests don't depend on any real connector.
-    rank = raw.get("rank")
-    if rank in (1, 2):
-        return "buy"
-    if rank in (4, 5):
-        return "sell"
-    return "hold" if rank == 3 else None
+    return {1: "strong_buy", 2: "buy", 3: "neutral", 4: "sell", 5: "strong_sell"}.get(raw.get("rank"))
 
 
 # A fake *credentialed* source (requires_credentials=True) — every currently-wired
@@ -127,7 +123,7 @@ async def test_source_not_configured_returns_error_not_raise(session: AsyncSessi
     monkeypatch.setitem(
         sources_module._SOURCES,
         _FAKE_SOURCE_NAME,
-        _Source(_FakeConnector, "fetch_rank", _fake_direction, "fetch_ranks", requires_credentials=True),
+        _Source(_FakeConnector, "fetch_rank", _fake_rating, "fetch_ranks", requires_credentials=True),
     )
     mgr = CredentialManager(session, _encryptor())
     registry = SignalSourceRegistry(mgr, user_id=None)
@@ -143,7 +139,7 @@ async def test_source_normalizes_rating_once_configured(
     monkeypatch.setitem(
         sources_module._SOURCES,
         _FAKE_SOURCE_NAME,
-        _Source(_FakeConnector, "fetch_rank", _fake_direction, "fetch_ranks", requires_credentials=True),
+        _Source(_FakeConnector, "fetch_rank", _fake_rating, "fetch_ranks", requires_credentials=True),
     )
     mgr = CredentialManager(session, _encryptor())
     await mgr.set_for_user(f"{_FAKE_SOURCE_NAME}_base_url", "https://acme.test", user_id=None)
@@ -151,7 +147,11 @@ async def test_source_normalizes_rating_once_configured(
     result = (await SignalSourceRegistry(mgr, user_id=None).fetch("AAPL", [_FAKE_SOURCE_NAME]))[0]
 
     assert result == ExternalSignal(
-        source=_FAKE_SOURCE_NAME, ticker="AAPL", direction="buy", raw={"rank": 1, "ticker": "AAPL"}
+        source=_FAKE_SOURCE_NAME,
+        ticker="AAPL",
+        direction="buy",
+        rating="strong_buy",
+        raw={"rank": 1, "ticker": "AAPL"},
     )
 
 
@@ -159,7 +159,7 @@ async def test_source_error_is_captured_not_raised(session: AsyncSession, monkey
     monkeypatch.setitem(
         sources_module._SOURCES,
         _FAKE_SOURCE_NAME,
-        _Source(_FailingConnector, "fetch_rank", _fake_direction, "fetch_ranks", requires_credentials=True),
+        _Source(_FailingConnector, "fetch_rank", _fake_rating, "fetch_ranks", requires_credentials=True),
     )
     mgr = CredentialManager(session, _encryptor())
     await mgr.set_for_user(f"{_FAKE_SOURCE_NAME}_base_url", "https://acme.test", user_id=None)
@@ -179,7 +179,7 @@ async def test_registry_discover_aggregates_every_source_ticker(
     monkeypatch.setitem(
         sources_module._SOURCES,
         _FAKE_SOURCE_NAME,
-        _Source(_FakeConnector, "fetch_rank", _fake_direction, "fetch_ranks", requires_credentials=True),
+        _Source(_FakeConnector, "fetch_rank", _fake_rating, "fetch_ranks", requires_credentials=True),
     )
     mgr = CredentialManager(session, _encryptor())
     await mgr.set_for_user(f"{_FAKE_SOURCE_NAME}_base_url", "https://acme.test", user_id=None)
@@ -188,10 +188,18 @@ async def test_registry_discover_aggregates_every_source_ticker(
 
     assert results == [
         ExternalSignal(
-            source=_FAKE_SOURCE_NAME, ticker="AAPL", direction="buy", raw={"rank": 1, "ticker": "AAPL"}
+            source=_FAKE_SOURCE_NAME,
+            ticker="AAPL",
+            direction="buy",
+            rating="strong_buy",
+            raw={"rank": 1, "ticker": "AAPL"},
         ),
         ExternalSignal(
-            source=_FAKE_SOURCE_NAME, ticker="TSLA", direction="sell", raw={"rank": 4, "ticker": "TSLA"}
+            source=_FAKE_SOURCE_NAME,
+            ticker="TSLA",
+            direction="sell",
+            rating="sell",
+            raw={"rank": 4, "ticker": "TSLA"},
         ),
     ]
 
@@ -200,7 +208,7 @@ async def test_registry_discover_skips_unconfigured_source(session: AsyncSession
     monkeypatch.setitem(
         sources_module._SOURCES,
         _FAKE_SOURCE_NAME,
-        _Source(_FakeConnector, "fetch_rank", _fake_direction, "fetch_ranks", requires_credentials=True),
+        _Source(_FakeConnector, "fetch_rank", _fake_rating, "fetch_ranks", requires_credentials=True),
     )
     mgr = CredentialManager(session, _encryptor())
     assert await SignalSourceRegistry(mgr, user_id=None).discover([_FAKE_SOURCE_NAME]) == []
@@ -212,7 +220,7 @@ async def test_registry_discover_swallows_connector_failure(
     monkeypatch.setitem(
         sources_module._SOURCES,
         _FAKE_SOURCE_NAME,
-        _Source(_FailingConnector, "fetch_rank", _fake_direction, "fetch_ranks", requires_credentials=True),
+        _Source(_FailingConnector, "fetch_rank", _fake_rating, "fetch_ranks", requires_credentials=True),
     )
     mgr = CredentialManager(session, _encryptor())
     await mgr.set_for_user(f"{_FAKE_SOURCE_NAME}_base_url", "https://acme.test", user_id=None)
@@ -221,21 +229,25 @@ async def test_registry_discover_swallows_connector_failure(
 
 
 def test_direction_from_rating_parses_text_and_numeric() -> None:
-    parse = sources_module._direction_from_rating
-    assert parse("Strong Buy") == "buy"
-    assert parse("strong_sell") == "sell"
-    assert parse("Hold") == "hold"
-    assert parse(0.5) == "buy"
-    assert parse(-0.5) == "sell"
-    assert parse(0.0) == "hold"
-    assert parse(None) is None
-    assert parse("unrelated text") is None
+    assert rating_from_text("Strong Buy") == "strong_buy"
+    assert rating_from_text("strong sell") == "strong_sell"
+    assert rating_from_text("Hold") == "neutral"
+    assert rating_from_score(0.6) == "strong_buy"
+    assert rating_from_score(-0.6) == "strong_sell"
+    assert rating_from_score(0.0) == "neutral"
+    assert rating_from_score(None) is None
+    assert rating_from_text(None) is None
+    assert rating_from_text("unrelated text") is None
+    assert direction_from_rating("strong_buy") == "buy"
+    assert direction_from_rating("sell") == "sell"
+    assert direction_from_rating("neutral") == "hold"
+    assert direction_from_rating(None) is None
 
 
 def test_fake_source_direction_maps_rank_to_buy_sell_hold() -> None:
-    assert _fake_direction({"rank": 1}) == "buy"
-    assert _fake_direction({"rank": 2}) == "buy"
-    assert _fake_direction({"rank": 3}) == "hold"
-    assert _fake_direction({"rank": 4}) == "sell"
-    assert _fake_direction({"rank": 5}) == "sell"
-    assert _fake_direction({"rank": None}) is None
+    assert _fake_rating({"rank": 1}) == "strong_buy"
+    assert _fake_rating({"rank": 2}) == "buy"
+    assert _fake_rating({"rank": 3}) == "neutral"
+    assert _fake_rating({"rank": 4}) == "sell"
+    assert _fake_rating({"rank": 5}) == "strong_sell"
+    assert _fake_rating({"rank": None}) is None

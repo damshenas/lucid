@@ -158,14 +158,21 @@ def test_signal_follow_discovers_candidates_without_watchlist_or_price_bars(
 def test_signal_sources_credential_free_always_configured(client: TestClient) -> None:
     """finviz/tradingview hit fixed public endpoints and need zero credentials —
     GET /api/v1/signals/sources must report both as configured even though nothing
-    was ever set via /api/v1/credentials."""
+    was ever set via /api/v1/credentials. finnhub/fmp_rating/fmp_grades DO require
+    credentials, so they must report unconfigured here (nothing was ever set)."""
     token = client.post(
         "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
     ).json()["access_token"]
     resp = client.get("/api/v1/signals/sources", headers=_auth(token))
     assert resp.status_code == 200
     sources = {row["source"]: row["configured"] for row in resp.json()}
-    assert sources == {"finviz": True, "tradingview": True}
+    assert sources == {
+        "finviz": True,
+        "tradingview": True,
+        "finnhub": False,
+        "fmp_rating": False,
+        "fmp_grades": False,
+    }
 
 
 def test_save_secret_rejected(client: TestClient) -> None:
