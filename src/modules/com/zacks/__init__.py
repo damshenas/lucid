@@ -35,6 +35,19 @@ class ZacksConnector:
         raw = await self._provider.get_json(f"/rank/{ticker}")
         return {"source": self.source, "ticker": ticker, "rank": raw.get("rank"), "raw": raw}
 
+    async def fetch_ranks(self) -> list[dict[str, Any]]:
+        """Every ticker Zacks currently has a rank for — used for candidate
+        *discovery* (no predefined ticker list required), unlike ``fetch_rank``
+        above which needs a ticker already in hand. Expects ``GET {base_url}/ranks``
+        -> ``{"items": [{"ticker": ..., "rank": ...}, ...]}``, one item per ranked
+        ticker, each shaped like a single ``fetch_rank`` result."""
+        raw = await self._provider.get_json("/ranks")
+        return [
+            {"source": self.source, "ticker": item["ticker"], "rank": item.get("rank"), "raw": item}
+            for item in raw.get("items", [])
+            if item.get("ticker")
+        ]
+
     async def aclose(self) -> None:
         await self._provider.aclose()
 

@@ -91,12 +91,18 @@ class _FakeConnector:
     async def fetch_rank(self, ticker: str) -> dict:
         return {"rank": 1, "ticker": ticker}
 
+    async def fetch_ranks(self) -> list[dict]:
+        return [{"rank": 1, "ticker": "AAPL"}, {"rank": 4, "ticker": "TSLA"}]
+
     async def aclose(self) -> None:
         pass
 
 
 class _FailingConnector(_FakeConnector):
     async def fetch_rank(self, ticker: str) -> dict:
+        raise RuntimeError("boom")
+
+    async def fetch_ranks(self) -> list[dict]:
         raise RuntimeError("boom")
 
 
@@ -113,7 +119,7 @@ async def test_source_normalizes_rating_once_configured(
     monkeypatch.setitem(
         sources_module._SOURCES,
         "zacks",
-        _Source(_FakeConnector, "fetch_rank", sources_module._zacks_direction),
+        _Source(_FakeConnector, "fetch_rank", sources_module._zacks_direction, "fetch_ranks"),
     )
     mgr = CredentialManager(session, _encryptor())
     await mgr.set_for_user("zacks_base_url", "https://zacks.test", user_id=None)
@@ -129,7 +135,7 @@ async def test_source_error_is_captured_not_raised(session: AsyncSession, monkey
     monkeypatch.setitem(
         sources_module._SOURCES,
         "zacks",
-        _Source(_FailingConnector, "fetch_rank", sources_module._zacks_direction),
+        _Source(_FailingConnector, "fetch_rank", sources_module._zacks_direction, "fetch_ranks"),
     )
     mgr = CredentialManager(session, _encryptor())
     await mgr.set_for_user("zacks_base_url", "https://zacks.test", user_id=None)
@@ -138,6 +144,47 @@ async def test_source_error_is_captured_not_raised(session: AsyncSession, monkey
 
     assert result.direction is None
     assert result.error == "boom"
+
+
+async def test_registry_discover_aggregates_every_source_ticker(
+    session: AsyncSession, monkeypatch
+) -> None:
+    """discover() is the bulk counterpart to fetch() — one call per source (not per
+    ticker), returning every ticker that source currently has an opinion on,
+    normalized the same way fetch() would per-ticker."""
+    monkeypatch.setitem(
+        sources_module._SOURCES,
+        "zacks",
+        _Source(_FakeConnector, "fetch_rank", sources_module._zacks_direction, "fetch_ranks"),
+    )
+    mgr = CredentialManager(session, _encryptor())
+    await mgr.set_for_user("zacks_base_url", "https://zacks.test", user_id=None)
+
+    results = await SignalSourceRegistry(mgr, user_id=None).discover(["zacks"])
+
+    assert results == [
+        ExternalSignal(source="zacks", ticker="AAPL", direction="buy", raw={"rank": 1, "ticker": "AAPL"}),
+        ExternalSignal(source="zacks", ticker="TSLA", direction="sell", raw={"rank": 4, "ticker": "TSLA"}),
+    ]
+
+
+async def test_registry_discover_skips_unconfigured_source(session: AsyncSession) -> None:
+    mgr = CredentialManager(session, _encryptor())
+    assert await SignalSourceRegistry(mgr, user_id=None).discover(["zacks"]) == []
+
+
+async def test_registry_discover_swallows_connector_failure(
+    session: AsyncSession, monkeypatch
+) -> None:
+    monkeypatch.setitem(
+        sources_module._SOURCES,
+        "zacks",
+        _Source(_FailingConnector, "fetch_rank", sources_module._zacks_direction, "fetch_ranks"),
+    )
+    mgr = CredentialManager(session, _encryptor())
+    await mgr.set_for_user("zacks_base_url", "https://zacks.test", user_id=None)
+
+    assert await SignalSourceRegistry(mgr, user_id=None).discover(["zacks"]) == []
 
 
 def test_direction_from_rating_parses_text_and_numeric() -> None:

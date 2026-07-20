@@ -14,7 +14,7 @@ from src.api.main import create_app
 from src.api.runtime import TradingRuntime
 from src.modules.broker import BrokerRegistry, PaperBroker
 from src.modules.price import storage
-from src.modules.signal.sources import ExternalSignal
+from src.modules.signal.sources import ExternalSignal, SignalSourceRegistry
 
 
 def _mock_broker_registry() -> BrokerRegistry:
@@ -106,19 +106,22 @@ def test_strategy_decisions_endpoint(client: TestClient) -> None:
     assert resp.json() == []
 
 
-def test_run_strategies_evaluates_buy_strategy_without_stored_price_bars(
+def test_signal_follow_discovers_candidates_without_watchlist_or_price_bars(
     client: TestClient, monkeypatch
 ) -> None:
-    """Regression: TradingRuntime.run_strategies used to skip buy evaluation for a
-    watchlist ticker entirely whenever no price bars were stored on disk yet — even
-    for a strategy (signal_follow) that never reads price_data at all, blocking it
-    from ever being evaluated. A ticker with zero stored bars must still reach the
-    strategy (and get a decision recorded) as long as it's on the watchlist."""
+    """signal_follow must never depend on the watchlist at all (USES_WATCHLIST =
+    False) — candidate tickers come from SignalSourceRegistry.discover() across its
+    declared EXTERNAL_SOURCES instead. NFLX is never added to the watchlist and has
+    zero stored price bars; it must still be evaluated (and act, since two
+    independent sources agree) purely from discovery."""
 
-    async def fake_external_signals(self, user_id, ticker, sources):
-        return [ExternalSignal(source="finviz", ticker=ticker, direction="buy")]
+    async def fake_discover(self, sources):
+        return [
+            ExternalSignal(source="finviz", ticker="NFLX", direction="buy"),
+            ExternalSignal(source="zacks", ticker="NFLX", direction="buy"),
+        ]
 
-    monkeypatch.setattr(TradingRuntime, "_external_signals", fake_external_signals)
+    monkeypatch.setattr(SignalSourceRegistry, "discover", fake_discover)
 
     admin_token = client.post(
         "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
@@ -132,20 +135,15 @@ def test_run_strategies_evaluates_buy_strategy_without_stored_price_bars(
         "/api/v1/auth/login", json={"username": "trader6", "password": "traderpass"}
     ).json()["access_token"]
 
-    add = client.post(
-        "/api/v1/prices/watchlist",
-        headers=_auth(trader_token),
-        json={"ticker": "NFLX", "asset_class": "equity"},
-    )
-    assert add.status_code == 201
+    # Deliberately no watchlist entries at all.
+    assert client.get("/api/v1/prices/watchlist", headers=_auth(trader_token)).json() == []
 
     activate = client.patch(
         "/api/v1/strategies/signal_follow/activate?direction=buy", headers=_auth(trader_token)
     )
     assert activate.status_code == 200
 
-    # No price bars stored anywhere for NFLX — the old code would have skipped
-    # evaluation entirely before ever calling into the strategy.
+    # No price bars stored anywhere for NFLX either.
     runtime: TradingRuntime = client.app.state.runtime
     asyncio.run(runtime.run_strategies())
 

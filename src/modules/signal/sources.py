@@ -100,20 +100,33 @@ class _Source:
     connector_cls: type
     fetch_method: str
     to_direction: DirectionFn
+    # Bulk "every currently-rated ticker" method name on the same connector class —
+    # used by SignalSourceRegistry.discover() for a strategy that doesn't rely on a
+    # predefined ticker list (e.g. strategies/buy/signal_follow.py). Returns a list of
+    # raw dicts shaped exactly like fetch_method's single-ticker result (each
+    # including its own "ticker" key), so `to_direction` is reused unchanged.
+    discover_method: str
 
 
 _SOURCES: dict[str, _Source] = {
-    "zacks": _Source(ZacksConnector, "fetch_rank", _zacks_direction),
+    "zacks": _Source(ZacksConnector, "fetch_rank", _zacks_direction, "fetch_ranks"),
     "tradingview": _Source(
-        TradingViewConnector, "fetch_technicals", lambda r: _direction_from_rating(r.get("recommendation"))
+        TradingViewConnector,
+        "fetch_technicals",
+        lambda r: _direction_from_rating(r.get("recommendation")),
+        "fetch_all_technicals",
     ),
     "barchart": _Source(
-        BarchartConnector, "fetch_opinion", lambda r: _direction_from_rating(r.get("opinion"))
+        BarchartConnector,
+        "fetch_opinion",
+        lambda r: _direction_from_rating(r.get("opinion")),
+        "fetch_all_opinions",
     ),
     "finviz": _Source(
         FinvizConnector,
         "fetch_metrics",
         lambda r: _direction_from_rating((r.get("metrics") or {}).get("recommendation")),
+        "fetch_screener",
     ),
 }
 
@@ -132,6 +145,47 @@ class SignalSourceRegistry:
     async def fetch(self, ticker: str, sources: list[str] | None = None) -> list[ExternalSignal]:
         names = [n for n in (sources or SOURCE_NAMES) if n in _SOURCES]
         return [await self._fetch_one(name, ticker) for name in names]
+
+    async def discover(self, sources: list[str] | None = None) -> list[ExternalSignal]:
+        """Every currently-rated ticker from each requested (default: all configured)
+        source, flattened into one list — the discovery counterpart to ``fetch()``,
+        for a strategy that doesn't rely on a predefined ticker list (no
+        per-ticker credential/connection failure here ever raises: an unconfigured
+        or failing source simply contributes nothing, same philosophy as
+        ``_fetch_one``'s ``error=`` handling)."""
+        names = [n for n in (sources or SOURCE_NAMES) if n in _SOURCES]
+        results: list[ExternalSignal] = []
+        for name in names:
+            results.extend(await self._discover_one(name))
+        return results
+
+    async def _discover_one(self, name: str) -> list[ExternalSignal]:
+        source = _SOURCES[name]
+        try:
+            base_url = await self._credentials.get_for_user(f"{name}_base_url", self._user_id)
+        except CredentialNotConfiguredError:
+            return []
+
+        api_key: str | None = None
+        try:
+            api_key = await self._credentials.get_for_user(f"{name}_api_key", self._user_id)
+        except CredentialNotConfiguredError:
+            pass  # optional for every current source
+
+        connector = source.connector_cls(base_url, api_key=api_key)
+        try:
+            raw_items = await getattr(connector, source.discover_method)()
+            return [
+                ExternalSignal(
+                    source=name, ticker=item["ticker"], direction=source.to_direction(item), raw=item
+                )
+                for item in raw_items
+            ]
+        except Exception as exc:  # noqa: BLE001 - one bad source must not break the rest
+            _logger.warning("signal source %s discovery failed: %s", name, exc)
+            return []
+        finally:
+            await connector.aclose()
 
     async def _fetch_one(self, name: str, ticker: str) -> ExternalSignal:
         source = _SOURCES[name]

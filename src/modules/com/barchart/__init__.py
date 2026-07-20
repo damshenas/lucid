@@ -31,6 +31,19 @@ class BarchartConnector:
         raw = await self._provider.get_json(f"/opinion/{ticker}")
         return {"source": self.source, "ticker": ticker, "opinion": raw.get("opinion"), "raw": raw}
 
+    async def fetch_all_opinions(self) -> list[dict[str, Any]]:
+        """Every ticker Barchart currently has an opinion for — used for candidate
+        *discovery* (no predefined ticker list required), unlike ``fetch_opinion``
+        above which needs a ticker already in hand. Expects ``GET {base_url}/
+        opinions`` -> ``{"items": [{"ticker": ..., "opinion": ...}, ...]}``, one item
+        per rated ticker, each shaped like a single ``fetch_opinion`` result."""
+        raw = await self._provider.get_json("/opinions")
+        return [
+            {"source": self.source, "ticker": item["ticker"], "opinion": item.get("opinion"), "raw": item}
+            for item in raw.get("items", [])
+            if item.get("ticker")
+        ]
+
     async def aclose(self) -> None:
         await self._provider.aclose()
 

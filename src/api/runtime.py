@@ -7,6 +7,7 @@ background jobs.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from src.modules.db.models.base import Role
@@ -32,6 +33,19 @@ from src.modules.strategy.loader import LoadedStrategy
 from .context import AppContext
 
 _logger = get_logger("runtime")
+
+
+@dataclass(slots=True)
+class _DiscoveredCandidate:
+    """Stand-in for a ``PriceWatchlist``/``Position`` row when a buy strategy
+    discovers its own candidate tickers (``LoadedStrategy.uses_watchlist=False``)
+    instead of iterating the shared watchlist — ``_evaluate_buy``/``_record_decision``
+    only ever need ``.ticker``/``.asset_class`` off whatever "item" they're given.
+    Every current external signal source is equity-only, hence the fixed default.
+    """
+
+    ticker: str
+    asset_class: str = "equity"
 
 
 class TradingRuntime:
@@ -140,18 +154,19 @@ class TradingRuntime:
 
     async def run_strategies(self) -> None:
         """Run each trader's active sell strategy over their own open positions, and
-        their active buy strategy over the (shared) price watchlist.
+        their active buy strategy over its candidate tickers.
 
-        These two have deliberately different ticker sources: a sell strategy only
-        ever needs to look at what a user already holds (``PositionRepository.
-        list_all_open`` — a position is itself the "universe", nothing extra to
-        configure), so it's independent of the watchlist and runs even for a ticker
-        that was never added there or was later removed from it. A buy strategy has
-        no such built-in universe — deciding what to *consider* buying requires a
-        user-curated list of candidate tickers, which is exactly what the watchlist
-        is for (Prices page > Watchlist / ``GET-POST-PATCH-DELETE /api/v1/prices/
-        watchlist``). Activating a strategy alone is therefore only a no-op for the
-        buy side when the watchlist is empty — the sell side always runs.
+        Sell strategies only ever need to look at what a user already holds
+        (``PositionRepository.list_all_open`` — a position is itself the
+        "universe", nothing extra to configure). Buy strategies need a candidate
+        list from somewhere, and get it one of two ways depending on
+        ``LoadedStrategy.uses_watchlist``: the default (True, e.g. ``trend_follow``)
+        evaluates the shared, user-curated price watchlist (Prices page > Watchlist
+        / ``GET-POST-PATCH-DELETE /api/v1/prices/watchlist``); a strategy that sets
+        ``USES_WATCHLIST = False`` (e.g. ``signal_follow``) instead discovers its own
+        candidates directly from its declared ``EXTERNAL_SOURCES`` (see
+        ``SignalSourceRegistry.discover`` in src/modules/signal/sources.py) and never
+        touches the watchlist at all.
         """
         async with self.ctx.db.session() as session:
             users = [
@@ -180,9 +195,12 @@ class TradingRuntime:
         )
         if not watchlist:
             _logger.debug(
-                "run_strategies: watchlist is empty — no *buy* signal will ever be "
-                "produced until a candidate ticker is added (Prices page > Watchlist); "
-                "sell strategies are unaffected, they run over open positions instead"
+                "run_strategies: watchlist is empty — a watchlist-based buy strategy "
+                "(LoadedStrategy.uses_watchlist=True, e.g. trend_follow) will never "
+                "produce a signal until a candidate ticker is added (Prices page > "
+                "Watchlist); a strategy that discovers its own candidates instead "
+                "(uses_watchlist=False, e.g. signal_follow) is unaffected, and sell "
+                "strategies always run over open positions regardless"
             )
 
         storage_path = self.ctx.settings.price.storage_path
@@ -231,28 +249,35 @@ class TradingRuntime:
                         _logger.warning("sell strategy eval failed %s/%s: %s", user.id, position.ticker, exc)
 
             if buy is not None:
-                for item in watchlist:
-                    if not _region_open(item.ticker):
-                        _logger.debug(
-                            "run_strategies: %s's market is currently closed — skipping buy eval",
-                            item.ticker,
-                        )
-                        continue
-                    # Bars are only a *requirement* for a buy strategy that actually
-                    # consumes context.price_data (e.g. trend_follow's local
-                    # SMA/RSI, which needs 200+ days of history) — a strategy that
-                    # decides purely from external signal sources (e.g.
-                    # signal_follow) needs no locally-stored history at all, so
-                    # evaluation is never skipped here just because
-                    # storage.read_bars() came back empty/None. Each strategy is
-                    # responsible for saying so in its own reasoning if it does need
-                    # bars it doesn't have yet (see trend_follow's "only N bars
-                    # stored" check).
-                    df = storage.read_bars(storage_path, item.ticker, "1d")
-                    try:
-                        await self._evaluate_buy(user.id, item, df, values, buy, benchmark_data)
-                    except Exception as exc:  # noqa: BLE001
-                        _logger.warning("buy strategy eval failed %s/%s: %s", user.id, item.ticker, exc)
+                if buy.uses_watchlist:
+                    for item in watchlist:
+                        if not _region_open(item.ticker):
+                            _logger.debug(
+                                "run_strategies: %s's market is currently closed — skipping buy eval",
+                                item.ticker,
+                            )
+                            continue
+                        # Bars are only a *requirement* for a buy strategy that
+                        # actually consumes context.price_data (e.g. trend_follow's
+                        # local SMA/RSI, which needs 200+ days of history) — a
+                        # strategy that decides purely from external signal sources
+                        # needs no locally-stored history at all, so evaluation is
+                        # never skipped here just because storage.read_bars() came
+                        # back empty/None. Each strategy is responsible for saying
+                        # so in its own reasoning if it does need bars it doesn't
+                        # have yet (see trend_follow's "only N bars stored" check).
+                        df = storage.read_bars(storage_path, item.ticker, "1d")
+                        try:
+                            await self._evaluate_buy(user.id, item, df, values, buy, benchmark_data)
+                        except Exception as exc:  # noqa: BLE001
+                            _logger.warning(
+                                "buy strategy eval failed %s/%s: %s", user.id, item.ticker, exc
+                            )
+                else:
+                    # This buy strategy discovers its own candidate tickers (e.g.
+                    # signal_follow, USES_WATCHLIST = False) instead of using the
+                    # shared price watchlist at all.
+                    await self._evaluate_buy_by_discovery(user.id, buy, values, benchmark_data, _region_open)
 
     async def _external_signals(
         self, user_id: int, ticker: str, sources: list[str]
@@ -271,6 +296,55 @@ class TradingRuntime:
         except Exception as exc:  # noqa: BLE001
             _logger.warning("external signal fetch failed for %s/%s: %s", user_id, ticker, exc)
             return []
+
+    async def _discover_buy_candidates(
+        self, user_id: int, sources: list[str]
+    ) -> dict[str, list[ExternalSignal]]:
+        """Every ticker any of ``sources`` currently has an opinion on, grouped by
+        ticker — the discovery counterpart to ``_external_signals`` above, used by a
+        buy strategy that sets ``USES_WATCHLIST = False`` (see
+        ``SignalSourceRegistry.discover`` in src/modules/signal/sources.py). Never
+        raises: a source that's unconfigured or fails simply contributes nothing."""
+        if not sources:
+            return {}
+        try:
+            async with self.ctx.db.session() as session:
+                registry = SignalSourceRegistry(self.ctx.credential_manager(session), user_id=user_id)
+                signals = await registry.discover(sources)
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("external signal discovery failed for user %s: %s", user_id, exc)
+            return {}
+        by_ticker: dict[str, list[ExternalSignal]] = {}
+        for sig in signals:
+            by_ticker.setdefault(sig.ticker, []).append(sig)
+        return by_ticker
+
+    async def _evaluate_buy_by_discovery(
+        self, user_id: int, buy: LoadedStrategy, values, benchmark_data, region_open
+    ) -> None:
+        candidates = await self._discover_buy_candidates(user_id, buy.external_sources)
+        _logger.debug(
+            "run_strategies: %s discovered %d candidate ticker(s) from %s: %s",
+            buy.name,
+            len(candidates),
+            buy.external_sources,
+            sorted(candidates),
+        )
+        storage_path = self.ctx.settings.price.storage_path
+        for ticker, signals in candidates.items():
+            if not region_open(ticker):
+                _logger.debug(
+                    "run_strategies: %s's market is currently closed — skipping buy eval", ticker
+                )
+                continue
+            df = storage.read_bars(storage_path, ticker, "1d")
+            item = _DiscoveredCandidate(ticker=ticker)
+            try:
+                await self._evaluate_buy(
+                    user_id, item, df, values, buy, benchmark_data, external_signals=signals
+                )
+            except Exception as exc:  # noqa: BLE001
+                _logger.warning("buy strategy eval failed %s/%s: %s", user_id, ticker, exc)
 
     async def _evaluate_sell(
         self, user_id: int, position, df, values, sell: LoadedStrategy, benchmark_data=None
@@ -300,9 +374,25 @@ class TradingRuntime:
             await self.ctx.bus.publish(sell_decision.event)
 
     async def _evaluate_buy(
-        self, user_id: int, item, df, values, buy: LoadedStrategy, benchmark_data=None
+        self,
+        user_id: int,
+        item,
+        df,
+        values,
+        buy: LoadedStrategy,
+        benchmark_data=None,
+        external_signals: list[ExternalSignal] | None = None,
     ) -> None:
-        external = await self._external_signals(user_id, item.ticker, buy.external_sources)
+        # The discovery path (_evaluate_buy_by_discovery) already fetched every
+        # candidate's signals as part of discovering it — pass those straight
+        # through instead of re-fetching per-ticker (that fetch is per-ticker,
+        # discovery is bulk-per-source; redoing it here would double the network
+        # calls for no reason).
+        external = (
+            external_signals
+            if external_signals is not None
+            else await self._external_signals(user_id, item.ticker, buy.external_sources)
+        )
         buy_decision = await buy.run(
             StrategyContext(
                 ticker=item.ticker,

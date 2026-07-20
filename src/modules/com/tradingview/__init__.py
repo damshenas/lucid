@@ -36,6 +36,25 @@ class TradingViewConnector:
             "raw": raw,
         }
 
+    async def fetch_all_technicals(self) -> list[dict[str, Any]]:
+        """Every ticker TradingView currently has a technical recommendation for —
+        used for candidate *discovery* (no predefined ticker list required), unlike
+        ``fetch_technicals`` above which needs a ticker already in hand. Expects
+        ``GET {base_url}/technicals`` -> ``{"items": [{"ticker": ..., "recommendation":
+        ...}, ...]}``, one item per rated ticker, each shaped like a single
+        ``fetch_technicals`` result."""
+        raw = await self._provider.get_json("/technicals")
+        return [
+            {
+                "source": self.source,
+                "ticker": item["ticker"],
+                "recommendation": item.get("recommendation"),
+                "raw": item,
+            }
+            for item in raw.get("items", [])
+            if item.get("ticker")
+        ]
+
     async def aclose(self) -> None:
         await self._provider.aclose()
 

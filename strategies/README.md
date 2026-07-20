@@ -41,6 +41,7 @@ FEATURES: list[str]              # UI feature tags — only "signals" currently 
                                   # on its detail page)
 EXTERNAL_SOURCES: list[str]      # third-party ratings to fetch before every run() —
                                   # see "External signal sources" below
+USES_WATCHLIST: bool             # buy strategies only, default True — see section 7
 ```
 
 "Native" vs "custom" in the UI is derived automatically (byte-identical to the
@@ -198,23 +199,31 @@ deliberately asymmetric:
   universe; there is nothing to configure. If you bought AMZN, your active sell
   strategy will be evaluated against AMZN every poll, whether or not AMZN is on the
   watchlist below.
-- **Buy strategies** run over the shared **price watchlist**
-  (`GET/POST/PATCH/DELETE /api/v1/prices/watchlist`, managed from the Prices page's
-  Watchlist card). This is the one part a strategy genuinely cannot "handle itself":
-  deciding what to *consider* buying requires some list of candidate tickers, and
-  scanning the whole market on every poll isn't practical (rate limits, cost). The
-  watchlist is that curated candidate list — add a ticker there for any buy strategy
-  to ever have a chance to fire on it. An empty watchlist means no buy signal will
-  ever be produced, regardless of which buy strategy is active.
+- **Buy strategies** get their candidate list one of two ways, controlled by the
+  optional module-level `USES_WATCHLIST` (default `True`):
+  - `USES_WATCHLIST = True` (the default, e.g. `trend_follow`): runs over the shared
+    **price watchlist** (`GET/POST/PATCH/DELETE /api/v1/prices/watchlist`, managed
+    from the Prices page's Watchlist card) — a user-curated candidate list, since
+    scanning the whole market on every poll isn't practical (rate limits, cost). An
+    empty watchlist means this kind of buy strategy never fires, regardless of which
+    one is active.
+  - `USES_WATCHLIST = False` (e.g. `signal_follow`): the watchlist is never
+    consulted at all — instead, the runtime asks every source in `EXTERNAL_SOURCES`
+    for the *full list* of tickers it currently has an opinion on
+    (`SignalSourceRegistry.discover()`, one bulk call per source, not one call per
+    ticker) and evaluates `run()` once per discovered ticker. This kind of strategy
+    is required to declare `EXTERNAL_SOURCES` — with nothing configured there's
+    nothing to discover.
 
 A sell strategy also needs **stored price bars on disk** before it runs (it can't
 decide anything about a position without knowing its current price). A *buy*
-strategy is evaluated for every watchlist ticker regardless of whether bars are
-stored yet — bars are only a hard requirement for a buy strategy that actually reads
-`context.price_data` (like `trend_follow`'s local SMA/RSI, which needs 200+ days of
-history first). A strategy that decides purely from external signal sources (see
-`strategies/buy/signal_follow.py`) never touches `price_data` at all and has no
-warm-up period — see the price system section below for the local-history case.
+strategy is evaluated for every candidate ticker (watchlist- or discovery-sourced)
+regardless of whether bars are stored yet — bars are only a hard requirement for a
+buy strategy that actually reads `context.price_data` (like `trend_follow`'s local
+SMA/RSI, which needs 200+ days of history first). A strategy that decides purely
+from external signal sources (see `strategies/buy/signal_follow.py`) never touches
+`price_data` at all and has no warm-up period — see the price system section below
+for the local-history case.
 
 ## 8. Price data prerequisite
 
@@ -256,6 +265,14 @@ on-demand with `POST /api/v1/signals/sources/check` (body: `{"ticker": "AAPL",
 "sources": ["zacks"]}`) without waiting for a scheduled strategy run. Omitting
 `EXTERNAL_SOURCES` (the default) means zero extra network calls on your strategy's
 behalf.
+
+If your buy strategy also sets `USES_WATCHLIST = False` (see section 7), the runtime
+calls each declared source's *bulk* discovery method instead
+(`SignalSourceRegistry.discover()` → each connector's `fetch_screener`/`fetch_ranks`/
+`fetch_all_technicals`/`fetch_all_opinions`) to get every ticker that source currently
+has an opinion on, in one call — not one call per ticker. `run()` is then invoked once
+per discovered ticker with that ticker's signals already populated in
+`context.external_signals`; there's no separate per-ticker fetch in this mode.
 
 ## 10. Activation
 

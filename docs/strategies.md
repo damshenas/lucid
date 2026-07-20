@@ -122,17 +122,21 @@ Activating a strategy doesn't mean every ticker gets evaluated the same way — 
 sell deliberately use different ticker sources (see `TradingRuntime.run_strategies` in
 `src/api/runtime.py`): a **sell** strategy runs over every ticker the user has an
 **open position** in (no configuration needed — the position itself is the
-universe), while a **buy** strategy runs over the shared **price watchlist**
+universe). A **buy** strategy's candidate list depends on its `USES_WATCHLIST` module
+attribute (default `True`): the default runs over the shared **price watchlist**
 (`/api/v1/prices/watchlist`) since deciding what to *consider* buying requires a
-curated candidate list. An empty watchlist means buy strategies never fire; it has no
-effect on sell strategies.
+curated candidate list — an empty watchlist means this kind of buy strategy never
+fires. `USES_WATCHLIST = False` (e.g. `signal_follow`) instead discovers candidates
+directly from its own `EXTERNAL_SOURCES` (`SignalSourceRegistry.discover()`) and never
+consults the watchlist at all. Neither setting has any effect on sell strategies.
 
-A buy strategy is evaluated for every watchlist ticker even if Lucid has no stored
-price bars for it yet — bars are only required by a strategy that actually reads
-`context.price_data` (`trend_follow`'s SMA/RSI needs 200+ days first). `signal_follow`
-(built-in) decides purely from external signal-provider ratings and has no such
-warm-up period. A sell strategy always needs at least one stored bar (it must know a
-position's current price).
+A buy strategy is evaluated for every candidate ticker (watchlist- or
+discovery-sourced) even if Lucid has no stored price bars for it yet — bars are only
+required by a strategy that actually reads `context.price_data` (`trend_follow`'s
+SMA/RSI needs 200+ days first). `signal_follow` (built-in) decides purely from
+external signal-provider ratings, requires at least 2 sources to agree by default
+(`min_buy_votes`), and has no such warm-up period. A sell strategy always needs at
+least one stored bar (it must know a position's current price).
 
 ## External signal sources
 

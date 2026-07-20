@@ -5,10 +5,14 @@ daily bars, which needs 200+ days of history before it can say anything), this
 strategy makes its buy/no-buy decision entirely from external signal providers'
 current ratings (Finviz/TradingView/Zacks/Barchart — see
 ``src/modules/signal/sources.py``) and never looks at ``context.price_data`` at all.
-It still only ever runs against the shared price watchlist (see
-``TradingRuntime.run_strategies`` in ``src/api/runtime.py``) — that's the candidate
-list a buy strategy needs regardless of what it bases its decision on — but it has no
-"needs N days of bars first" warm-up period the way a local-indicator strategy does.
+
+It also does NOT use the shared price watchlist as its candidate list — unlike every
+other buy strategy, it sets ``USES_WATCHLIST = False`` so ``TradingRuntime.
+run_strategies`` (src/api/runtime.py) discovers candidate tickers directly from this
+strategy's own ``EXTERNAL_SOURCES`` (via ``SignalSourceRegistry.discover()``) instead
+of iterating any predefined list. The default ``min_buy_votes = 2`` means a ticker
+only gets acted on once at least two independent sources currently agree it's a buy —
+a single source's opinion alone is treated as inconclusive, not a signal to act on.
 """
 
 from __future__ import annotations
@@ -17,10 +21,12 @@ from src.modules.bus import BuySignalEvent
 from src.modules.strategy.context import StrategyContext, StrategyDecision
 
 STRATEGY_NAME = "signal_follow"
-STRATEGY_VERSION = "1.0.0"
+STRATEGY_VERSION = "2.0.0"
 STRATEGY_DESCRIPTION = (
-    "Buy when external signal providers (Finviz/TradingView/Zacks/Barchart) rate a "
-    "ticker 'buy' — no local price history required."
+    "Buy when at least 2 external signal providers (Finviz/TradingView/Zacks/"
+    "Barchart) currently rate a ticker 'buy' — no local price history and no "
+    "watchlist entry required; candidates are discovered directly from the "
+    "providers themselves."
 )
 FEATURES = ["signals"]
 # Every currently-supported provider (src/modules/signal/sources.py SOURCE_NAMES) —
@@ -28,9 +34,12 @@ FEATURES = ["signals"]
 # (GET /api/v1/signals/sources shows what's usable right now); an unconfigured one
 # just comes back with error="not configured" and doesn't count toward the vote.
 EXTERNAL_SOURCES = ["finviz", "tradingview", "zacks", "barchart"]
+# Candidate tickers come from EXTERNAL_SOURCES' own discovery endpoints (see
+# SignalSourceRegistry.discover), never from the shared price watchlist.
+USES_WATCHLIST = False
 
 CONFIG_SCHEMA = {
-    "min_buy_votes": {"type": "int", "default": 1, "required": False},
+    "min_buy_votes": {"type": "int", "default": 2, "required": False},
 }
 
 

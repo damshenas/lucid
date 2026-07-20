@@ -31,6 +31,20 @@ class FinvizConnector:
         raw = await self._provider.get_json(f"/quote/{ticker}")
         return {"source": self.source, "ticker": ticker, "metrics": raw.get("metrics", {}), "raw": raw}
 
+    async def fetch_screener(self) -> list[dict[str, Any]]:
+        """Every ticker Finviz's own screen currently has an opinion on — used for
+        candidate *discovery* (no predefined ticker list required), unlike
+        ``fetch_metrics`` above which needs a ticker already in hand. Expects
+        ``GET {base_url}/screener`` -> ``{"items": [{"ticker": ..., "metrics":
+        {...}}, ...]}``, one item per rated ticker, each shaped like a single
+        ``fetch_metrics`` result."""
+        raw = await self._provider.get_json("/screener")
+        return [
+            {"source": self.source, "ticker": item["ticker"], "metrics": item.get("metrics", {}), "raw": item}
+            for item in raw.get("items", [])
+            if item.get("ticker")
+        ]
+
     async def aclose(self) -> None:
         await self._provider.aclose()
 

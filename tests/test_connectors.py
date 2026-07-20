@@ -49,6 +49,42 @@ async def test_other_connectors_shape() -> None:
         await c.aclose()
 
 
+async def test_connectors_discovery_methods_return_one_item_per_ticker() -> None:
+    """Each connector's bulk 'discover every currently-rated ticker' method (used by
+    a buy strategy with USES_WATCHLIST = False, e.g. strategies/buy/signal_follow.py)
+    returns items shaped exactly like its single-ticker fetch method's result."""
+
+    def zacks_handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/ranks"
+        return httpx.Response(200, json={"items": [{"ticker": "AAPL", "rank": 1}]})
+
+    def finviz_handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/screener"
+        return httpx.Response(200, json={"items": [{"ticker": "MSFT", "metrics": {"recommendation": "buy"}}]})
+
+    def tv_handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/technicals"
+        return httpx.Response(200, json={"items": [{"ticker": "NVDA", "recommendation": "strong_buy"}]})
+
+    def barchart_handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/opinions"
+        return httpx.Response(200, json={"items": [{"ticker": "TSLA", "opinion": "sell"}]})
+
+    zacks = ZacksConnector("https://provider.test", client=_client(zacks_handler))
+    finviz = FinvizConnector("https://provider.test", client=_client(finviz_handler))
+    tv = TradingViewConnector("https://provider.test", client=_client(tv_handler))
+    barchart = BarchartConnector("https://provider.test", client=_client(barchart_handler))
+
+    assert await zacks.fetch_ranks() == [{"source": "zacks", "ticker": "AAPL", "rank": 1, "raw": {"ticker": "AAPL", "rank": 1}}]
+    assert (await finviz.fetch_screener())[0]["ticker"] == "MSFT"
+    assert (await tv.fetch_all_technicals())[0]["recommendation"] == "strong_buy"
+    assert (await barchart.fetch_all_opinions())[0]["opinion"] == "sell"
+
+    for c in (zacks, finviz, tv, barchart):
+        await c.aclose()
+
+
+
 async def test_with_retry_succeeds_after_transient_failures() -> None:
     calls = 0
 

@@ -41,6 +41,14 @@ class LoadedStrategy:
     run: RunFn
     module: ModuleType
     external_sources: list[str]
+    # Whether a *buy* strategy is evaluated over the shared price watchlist (the
+    # default, True) or discovers its own candidate tickers instead (e.g.
+    # strategies/buy/signal_follow.py sets USES_WATCHLIST = False to discover
+    # candidates from its EXTERNAL_SOURCES directly — see
+    # TradingRuntime.run_strategies / SignalSourceRegistry.discover in
+    # src/api/runtime.py, src/modules/signal/sources.py). Meaningless for a sell
+    # strategy, which always runs over open positions regardless.
+    uses_watchlist: bool = True
 
 
 def _require(module: ModuleType, attr: str, path: Path) -> Any:
@@ -84,6 +92,7 @@ def load_strategy_file(path: Path, direction: str, builtin_root: str | Path | No
         # ["zacks", "tradingview"]. Optional; omitting it (the common case) means no
         # external network call is made on this strategy's behalf.
         external_sources=list(getattr(module, "EXTERNAL_SOURCES", [])),
+        uses_watchlist=bool(getattr(module, "USES_WATCHLIST", True)),
     )
 
 

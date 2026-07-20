@@ -32,14 +32,25 @@ export function Login({ initialized, sessionExpired, onLogin, onSetup }: Props) 
     }
   }
 
-  async function submit(e: React.FormEvent) {
+  async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError(null);
     setBusy(true);
+    // Read the submitted values straight from the DOM (FormData) instead of
+    // trusting the controlled `username`/`password` state. Some browsers'
+    // autofill / password-manager extensions set an input's value without
+    // dispatching a React-visible input/change event, so the state variable can
+    // still be empty on the very first submit even though the fields visibly show
+    // the autofilled text — that made the first login/setup click silently no-op
+    // (empty credentials rejected) and only a second click, after some later event
+    // (e.g. the user's own keystroke or a blur) synced the state, actually worked.
+    const data = new FormData(e.currentTarget);
+    const u = String(data.get("username") ?? "");
+    const p = String(data.get("password") ?? "");
     try {
-      if (isSetup) await onSetup(username, password);
-      else await onLogin(username, password);
-      await offerToSaveCredential(username, password);
+      if (isSetup) await onSetup(u, p);
+      else await onLogin(u, p);
+      await offerToSaveCredential(u, p);
     } catch (err) {
       setError((err as Error).message);
     } finally {
