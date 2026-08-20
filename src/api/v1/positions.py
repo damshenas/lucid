@@ -60,9 +60,16 @@ async def sync_positions_from_broker(
         else:
             await repo.update(existing, quantity=bp.quantity, avg_price=bp.avg_price)
 
-    # Close local open positions the broker no longer reports.
+    # Close local open positions the broker no longer reports — scoped to this
+    # asset_class only. list_open() returns a user's open positions across every
+    # asset class (equity/crypto/fx/commodity can each have their own broker), so
+    # without this filter a sync of one asset class would wrongly close open
+    # positions that simply belong to a *different* asset class and were never
+    # queried from this broker at all.
     closed = 0
     for local in await repo.list_open(user_id):
+        if local.asset_class != asset_class:
+            continue
         if local.ticker not in seen:
             await repo.update(
                 local, quantity=0.0, status=PositionStatus.closed.value, closed_at=now

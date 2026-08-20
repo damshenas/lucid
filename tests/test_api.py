@@ -14,16 +14,21 @@ from src.api.main import create_app
 from src.api.runtime import TradingRuntime
 from src.modules.broker import BrokerRegistry, PaperBroker
 from src.modules.price import storage
+from src.modules.schedules import market_hours
 from src.modules.signal.sources import ExternalSignal, SignalSourceRegistry
 
 
 def _mock_broker_registry() -> BrokerRegistry:
     """A broker registry that maps 'trading212' to a PaperBroker — no
     network calls, no credentials required.  Used in API integration tests
-    that exercise the execution/position layer without hitting Trading212."""
+    that exercise the execution/position layer without hitting Trading212.
+    A separate instance is registered for 'crypto' (distinct from 'equity')
+    so tests can exercise per-asset-class broker isolation."""
     registry = BrokerRegistry()
     paper = PaperBroker()
+    paper_crypto = PaperBroker()
     registry.register("trading212", "equity", lambda **kw: paper)
+    registry.register("trading212", "crypto", lambda **kw: paper_crypto)
     return registry
 
 
@@ -122,6 +127,10 @@ def test_signal_follow_discovers_candidates_without_watchlist_or_price_bars(
         ]
 
     monkeypatch.setattr(SignalSourceRegistry, "discover", fake_discover)
+    # This test's assertions don't care whether NFLX's market is currently open —
+    # without this, the test's pass/fail depended on the wall-clock time it happened
+    # to run at (real NYSE hours via src.modules.schedules.market_hours.is_open).
+    monkeypatch.setattr(market_hours, "is_open", lambda region, now=None: True)
 
     admin_token = client.post(
         "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
@@ -481,6 +490,47 @@ def test_sync_reflects_broker_positions_after_manual_order(client: TestClient) -
     # Position must still be open after the sync.
     positions_after = client.get("/api/v1/positions", headers=_auth(token)).json()
     assert any(p["ticker"] == "AMZN" for p in positions_after)
+
+
+def test_sync_does_not_close_positions_in_other_asset_classes(client: TestClient) -> None:
+    """POST /positions/sync?asset_class=equity must only reconcile equity positions.
+    A user's open crypto position (a different broker/asset_class entirely) must be
+    left untouched — previously the reconciliation loop closed *every* locally open
+    position not reported by the queried asset class's broker, regardless of that
+    position's own asset_class, wrongly wiping out other asset classes' holdings."""
+    admin_token = client.post(
+        "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
+    ).json()["access_token"]
+    client.post(
+        "/api/v1/admin/users",
+        headers=_auth(admin_token),
+        json={"username": "trader1", "password": "traderpass", "role": "trader"},
+    )
+    token = client.post(
+        "/api/v1/auth/login", json={"username": "trader1", "password": "traderpass"}
+    ).json()["access_token"]
+
+    client.post(
+        "/api/v1/orders/manual",
+        headers=_auth(token),
+        json={"ticker": "AAPL", "side": "buy", "quantity": 1},
+    )
+    resp = client.post(
+        "/api/v1/orders/manual",
+        headers=_auth(token),
+        json={"ticker": "BTC", "side": "buy", "quantity": 1, "asset_class": "crypto"},
+    )
+    assert resp.status_code == 201
+
+    sync_resp = client.post(
+        "/api/v1/positions/sync", params={"asset_class": "equity"}, headers=_auth(token)
+    )
+    assert sync_resp.status_code == 200
+    assert sync_resp.json()["closed"] == 0
+
+    positions_after = client.get("/api/v1/positions", headers=_auth(token)).json()
+    btc = next(p for p in positions_after if p["ticker"] == "BTC")
+    assert btc["status"] == "open"
 
 
 def test_admin_reset_trading_data_wipes_history_and_resyncs(client: TestClient) -> None:
