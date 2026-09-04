@@ -392,3 +392,61 @@ with the codebase. Newest entries at the bottom.
   Admin user mgmt is create+list only (no edit/reset/delete). `price/regime.py` exists but
   isn't consumed by either built-in strategy. See missing.md (created 2026-07-10 from
   fdiff.md gap analysis) for the full decision list before adding any of these back.
+  STALE as of a later audit (2026-09-04): a manual-order endpoint (`POST
+  /api/v1/orders/manual`, `ExecutionEngine.place_manual_order`) and multi-region
+  market-hours gating (`schedules/market_hours.py`, `_region_open` in runtime.py) were
+  both added after this note was written, and `trailing_stop` v2.0.0 now consumes
+  `price/regime.py` for its regime-aware ATR multiplier — don't trust this bullet's
+  "missing" list at face value, check the current code first.
+
+- 2026-09-04 audit — hunted specifically for LOGIC/business-rule bugs (not
+  syntax/type errors) across the whole trading pipeline. Two real findings, plus one
+  false-positive worth recording so it isn't re-flagged:
+  1. **CONFIRMED BUG — pending broker orders silently treated as filled.**
+     `ExecutionEngine.handle_buy`/`handle_sell`/`place_manual_order`
+     (src/modules/execution/__init__.py) only branch on
+     `result.status == OrderStatus.rejected.value`; every other status — including
+     `OrderStatus.pending` — falls through the same path that opens a position,
+     records the order as `filled`, and publishes `OrderFilledEvent`.
+     `Trading212Broker.place_market_order` (src/modules/com/trading212/__init__.py)
+     explicitly returns `status=str(data.get("status", "pending")).lower()`, i.e. a
+     real, expected value from that connector. `PaperBroker` always returns
+     `"filled"`, which is why this never surfaces in paper/demo testing. There is no
+     job anywhere that later reconciles a `pending` order against the broker, so a
+     non-instantly-filled market order permanently corrupts local position state
+     (wrong `avg_price`, phantom open position) with no way to self-heal. No test
+     exercises `OrderStatus.pending`. Fix direction: only the `filled` branch should
+     open/update a position and publish `OrderFilledEvent`; `pending` should persist
+     the order as pending and be reconciled by a follow-up check.
+  2. **CONFIRMED GAP — no validation that `active_buy_strategy`/`active_sell_strategy`
+     actually points at a strategy of that direction.** `schema.py` declares both as
+     bare `str | None` with no validator; `ConfigService.set_value`
+     (src/modules/configs/__init__.py) only checks write permission, never the
+     strategy registry; `StrategyRegistryService.get_active`/`get_loaded`
+     (src/modules/strategy/registry.py) looks a name up across ALL discovered
+     strategies regardless of direction. A trader could (accidentally, or via a
+     raw API call bypassing the UI's presumably direction-filtered dropdown) set
+     `strategy.active_buy_strategy = "trailing_stop"` (a sell-only strategy) and the
+     backend accepts it silently. At runtime this currently fails "safe" — the
+     misdirected strategy's own guard (e.g. trailing_stop's `if position is None:
+     return acted=False`) means it just never fires — but the user has no way to
+     discover their "active" buy strategy is actually inert; nothing surfaces an
+     error anywhere. Worth a server-side check in `set_value`/`save_values` that
+     resolves the strategy and compares `.direction`.
+  3. **FALSE POSITIVE (investigated, NOT a bug — recorded to avoid re-flagging):**
+     `AppContext.resolve_broker` (src/api/context.py) hardcodes
+     `paper_mode=False` when calling `BrokerRegistry.resolve(...)`, which looks at
+     first glance like it defeats `broker.paper_mode` ever routing to the in-memory
+     `PaperBroker` (src/modules/broker/paper.py), and that `broker_credentials_required`
+     defaulting to `True` in production means Trading212 credentials are always
+     required even when `paper_mode=True`. Both are **intentional**, not bugs:
+     `tests/test_api.py::test_sync_reflects_broker_positions_after_manual_order`
+     documents that an earlier version *did* route `paper_mode=True` to the ephemeral
+     in-memory `PaperBroker`, and that broke `POST /positions/sync` (the broker had no
+     memory of orders placed against a different, throwaway `PaperBroker` instance
+     each call, so sync closed positions that were actually still open). The real
+     design (confirmed by a comment in src/api/v1/credentials.py): `broker.paper_mode`
+     only switches Trading212's DEMO vs LIVE base URL — "paper trading" means trading
+     against Trading212's own demo account (needs its own real Trading212 API
+     credentials tied to that demo account), not a fully-local zero-credential
+     simulator. Do not "fix" this again without re-reading that test first.
