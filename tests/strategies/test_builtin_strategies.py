@@ -71,6 +71,50 @@ async def test_trailing_stop_full_exit_on_stop() -> None:
     assert decision.event.quantity_pct is None  # full exit
 
 
+async def test_trailing_stop_uses_current_price_over_stale_daily_close() -> None:
+    """Regression test for bugs.md finding 3: the daily bar's last close can still
+    look safely above the stop while a fresher intraday price has already crossed
+    it — the strategy must use context.current_price for that comparison, not
+    price_data's daily close."""
+    strat = _LOADED["trailing_stop"]
+    # Flat at 200 the whole time - daily close alone would report "above stop".
+    values = np.full(60, 200.0)
+    ctx = StrategyContext(
+        ticker="AAPL", user_id=1, asset_class="equity",
+        price_data=_df(values),
+        position=PositionView(ticker="AAPL", quantity=10, avg_price=200.0),
+        current_price=100.0,  # a fresher intraday price well below any reasonable stop
+    )
+    decision = await strat.run(ctx)
+    assert decision.acted
+    assert decision.event is not None
+    assert decision.event.quantity_pct is None  # full exit
+    assert "100.00" in decision.reasoning
+
+
+async def test_trailing_stop_trails_from_peak_not_entry() -> None:
+    """Regression test for bugs.md finding 4: the stop must trail the highest price
+    seen since entry, not stay anchored to entry forever — a retrace that's still
+    well above an entry-anchored stop, but below a peak-anchored one, must now
+    trigger the stop."""
+    strat = _LOADED["trailing_stop"]
+    # Rose from 100 (entry) to a 140 peak, then retraced to 115 — comfortably above
+    # an entry-anchored stop (100 - atr*mult) but below one trailing the 140 peak.
+    values = np.concatenate([np.linspace(100.0, 140.0, 40), np.linspace(140.0, 115.0, 20)])
+    ctx = StrategyContext(
+        ticker="AAPL", user_id=1, asset_class="equity",
+        price_data=_df(values),
+        position=PositionView(
+            ticker="AAPL", quantity=10, avg_price=100.0, high_water_mark=140.0
+        ),
+    )
+    decision = await strat.run(ctx)
+    assert decision.acted
+    assert decision.event is not None
+    assert decision.event.quantity_pct is None  # full exit, stop-loss branch
+    assert "140.00" in decision.reasoning  # trailing from the peak, not entry
+
+
 async def test_trailing_stop_profit_take_partial() -> None:
     strat = _LOADED["trailing_stop"]
     values = np.linspace(100.0, 130.0, 60)

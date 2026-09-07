@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,6 +25,8 @@ from src.modules.authorization import (
     has_permission,
     require_permission,
 )
+from src.modules.db.connection import Database
+from src.modules.db.repositories.user import UserRepository
 
 
 def test_password_hash_verify() -> None:
@@ -62,6 +66,48 @@ async def test_first_admin_bootstrap_then_lockdown(session: AsyncSession) -> Non
 
     with pytest.raises(FirstRunError):
         await svc.bootstrap_first_admin("root2", "pw")
+
+
+async def test_concurrent_bootstrap_only_one_admin_created(db: Database) -> None:
+    """Regression test for bugs.md finding 8: two concurrent first-run setup
+    requests must not both succeed. AuthService.bootstrap_first_admin's atomic
+    sentinel-row insert (not the plain has_any_user() count check) is what
+    guarantees only one wins."""
+
+    async def attempt(username: str) -> FirstRunError | None:
+        try:
+            async with db.transaction() as session:
+                await AuthService(session).bootstrap_first_admin(username, "password123")
+        except FirstRunError as exc:
+            return exc
+        return None
+
+    results = await asyncio.gather(attempt("root1"), attempt("root2"))
+    assert sum(1 for r in results if r is None) == 1
+    assert sum(1 for r in results if isinstance(r, FirstRunError)) == 1
+
+    async with db.session() as session:
+        assert await UserRepository(session).count_users() == 1
+
+
+async def test_concurrent_failed_logins_all_increment_attempts(db: Database) -> None:
+    """Regression test for bugs.md finding 9: concurrent wrong-password requests
+    must each count individually (atomic DB-side increment) — a python-level
+    read-then-write can lose updates and let far more than MAX_FAILED_ATTEMPTS
+    guesses through before locking."""
+    async with db.transaction() as session:
+        await AuthService(session).bootstrap_first_admin("root", "password123")
+
+    async def attempt() -> None:
+        async with db.transaction() as session:
+            with pytest.raises(InvalidCredentialsError):
+                await AuthService(session).authenticate("root", "wrongpass")
+
+    await asyncio.gather(*(attempt() for _ in range(4)))
+
+    async with db.session() as session:
+        user = await UserRepository(session).get_by_username("root")
+    assert user.failed_login_attempts == 4
 
 
 async def test_authenticate(session: AsyncSession) -> None:

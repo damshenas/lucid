@@ -2,6 +2,11 @@
 
 Audit date: 2026-09-04
 
+**Update (2026-09-07):** findings 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, and 18 (every
+Critical/High severity item) have been fixed — see `docs/agent-notes.md`'s
+2026-09-07 entry for implementation details and any deviations from the fix
+direction below. Findings 11-17, 19-22 remain open.
+
 ## Scope
 
 This audit covers application behavior and trading/business rules. It excludes
@@ -34,6 +39,8 @@ Severity means:
 
 **Severity:** Critical
 
+**Status:** FIXED (2026-09-07) — see docs/agent-notes.md.
+
 **Evidence:**
 
 - `src/modules/db/models/position.py:15` uniquely constrains positions by
@@ -60,6 +67,8 @@ The latter loses clean round-trip history unless history is stored elsewhere.
 ### 2. Pending or unknown broker orders are recorded as filled
 
 **Severity:** Critical
+
+**Status:** FIXED (2026-09-07) — see docs/agent-notes.md.
 
 **Evidence:**
 
@@ -88,6 +97,8 @@ status.
 ### 3. Strategy polling uses stale daily prices and ignores fetched intraday bars
 
 **Severity:** High
+
+**Status:** FIXED (2026-09-07) — see docs/agent-notes.md.
 
 **Evidence:**
 
@@ -124,6 +135,8 @@ non-watchlist ticker receiving intraday updates.
 
 **Severity:** High business-logic mismatch
 
+**Status:** FIXED (2026-09-07) — see docs/agent-notes.md.
+
 **Evidence:** `strategies/sell/trailing_stop.py:83-87` calculates:
 
 ```python
@@ -151,6 +164,8 @@ the post-entry peak while remaining above the entry-based stop.
 ### 5. Position identity omits asset class
 
 **Severity:** High
+
+**Status:** FIXED (2026-09-07) — see docs/agent-notes.md.
 
 **Evidence:**
 
@@ -184,6 +199,8 @@ instrument tickers that normalize to the same base symbol.
 
 **Severity:** High
 
+**Status:** FIXED (2026-09-07) — see docs/agent-notes.md.
+
 **Evidence:**
 
 - `src/api/v1/admin.py:282-286` deletes every order, signal, decision, and position
@@ -210,6 +227,8 @@ holdings are restored.
 ### 7. A profit tier can execute twice when strategy runs overlap
 
 **Severity:** High
+
+**Status:** FIXED (2026-09-07) — see docs/agent-notes.md.
 
 **Evidence:**
 
@@ -243,6 +262,8 @@ decision-log deduplication is not an execution idempotency mechanism.
 
 **Severity:** High
 
+**Status:** FIXED (2026-09-07) — see docs/agent-notes.md.
+
 **Evidence:**
 
 - `src/modules/authentication/service.py:55-63` performs `count_users()` and
@@ -266,6 +287,8 @@ atomic bootstrap sentinel. Treat the losing concurrent request as `409 Conflict`
 
 **Severity:** High
 
+**Status:** FIXED (2026-09-07) — see docs/agent-notes.md.
+
 **Evidence:** `src/modules/authentication/service.py:97-110` reads
 `failed_login_attempts`, increments it in Python, and writes the absolute value back
 without row locking or an atomic update.
@@ -287,6 +310,8 @@ must be part of the same atomic transition.
 ### 10. The last active administrator can demote their own account
 
 **Severity:** High
+
+**Status:** FIXED (2026-09-07) — see docs/agent-notes.md.
 
 **Evidence:** `src/api/v1/admin.py:87-113` protects deactivation of the last active
 admin, but applies a role change without the equivalent check.
@@ -497,6 +522,8 @@ explicitly modeled.
 ### 18. Watchlist identity omits asset class and silently reclassifies a ticker
 
 **Severity:** High
+
+**Status:** FIXED (2026-09-07, with a scope deviation from the fix direction below — see docs/agent-notes.md).
 
 **Evidence:**
 

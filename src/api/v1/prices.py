@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.modules.authorization import Permission
 from src.modules.com import yahoofinance
 from src.modules.db.models.user import User
-from src.modules.db.repositories.price import PriceWatchlistRepository
+from src.modules.db.repositories.price import PriceWatchlistRepository, WatchlistAssetClassConflictError
 from src.modules.price import storage
 from src.modules.price.pipeline import PricePipeline
 
@@ -93,9 +93,12 @@ async def add_to_watchlist(
     session: AsyncSession = Depends(get_session),
     user: User = Depends(require_permission(Permission.edit_own_strategies)),
 ) -> dict[str, Any]:
-    row = await PriceWatchlistRepository(session).upsert(
-        body.ticker, asset_class=body.asset_class, poll_interval=body.poll_interval, region=body.region
-    )
+    try:
+        row = await PriceWatchlistRepository(session).upsert(
+            body.ticker, asset_class=body.asset_class, poll_interval=body.poll_interval, region=body.region
+        )
+    except WatchlistAssetClassConflictError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     await session.commit()
     return {
         "ticker": row.ticker,

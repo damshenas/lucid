@@ -1,9 +1,12 @@
 """Built-in sell strategy: ATR trailing stop with tiered profit taking.
 
-- Full exit when price falls below ``entry - atr * atr_multiplier`` (the multiplier
-  widens to ``bear_atr_multiplier`` when the benchmark is in a "bear" regime — see
-  ``src.modules.price.regime`` — giving the position more room before the stop cuts
-  it, since a broad pullback is more likely to be noise than a bear market).
+- Full exit when price falls below ``high_water_mark - atr * atr_multiplier`` (the
+  multiplier widens to ``bear_atr_multiplier`` when the benchmark is in a "bear"
+  regime — see ``src.modules.price.regime`` — giving the position more room before
+  the stop cuts it, since a broad pullback is more likely to be noise than a bear
+  market). ``high_water_mark`` is the highest price seen since entry (persisted on
+  the position, see ``Position.high_water_mark``), so the stop actually trails
+  behind a rally instead of only ever protecting the original entry price.
 - Tier 1: once price reaches ``entry * (1 + profit_take_pct_1/100)``, sell
   ``take_pct_1`` percent of the *current* position (fires once per position).
 - Tier 2: once price reaches ``entry * (1 + profit_take_pct_2/100)``, sell
@@ -23,10 +26,12 @@ from src.modules.price.indicators import compute_snapshot
 from src.modules.strategy.context import StrategyContext, StrategyDecision
 
 STRATEGY_NAME = "trailing_stop"
-STRATEGY_VERSION = "2.0.0"
+STRATEGY_VERSION = "2.1.0"
 STRATEGY_DESCRIPTION = (
-    "ATR trailing stop (regime-aware) plus two profit-taking tiers."
+    "ATR trailing stop (regime-aware, trails from the post-entry peak) plus two "
+    "profit-taking tiers."
 )
+
 
 CONFIG_SCHEMA = {
     "atr_multiplier": {"type": "float", "default": 3.0, "required": False},
@@ -70,14 +75,25 @@ async def run(context: StrategyContext) -> StrategyDecision:
             effective_atr_mult = bear_atr_mult
 
     snap = compute_snapshot(df)
-    price = float(df["close"].iloc[-1])
+    # ATR/SMA still come from the daily-bar dataframe (needs real history), but the
+    # stop/tier comparisons use the freshest price available (intraday if fetched,
+    # else the daily close) — otherwise an intraday move through the stop or a
+    # profit tier goes unnoticed until the next daily bar (bugs.md finding 3).
+    price = context.current_price if context.current_price is not None else float(df["close"].iloc[-1])
     entry = position.avg_price
-    stop_price = entry - snap.atr * effective_atr_mult if snap.atr is not None else None
+    # Trail from the highest price seen since entry, not from entry itself —
+    # otherwise this never actually trails and can give back the entire unrealized
+    # gain before cutting the position (bugs.md finding 4). Falls back to entry only
+    # for a not-yet-migrated position row (PositionView.high_water_mark is None).
+    peak = position.high_water_mark if position.high_water_mark is not None else entry
+    stop_price = peak - snap.atr * effective_atr_mult if snap.atr is not None else None
     tier1_price = entry * (1 + profit_take_pct_1 / 100.0)
     tier2_price = entry * (1 + profit_take_pct_2 / 100.0)
 
     if stop_price is not None and price < stop_price:
-        reasoning = f"price {price:.2f} broke ATR trailing stop ({stop_price:.2f})"
+        reasoning = (
+            f"price {price:.2f} broke ATR trailing stop ({stop_price:.2f}, trailing {peak:.2f} peak)"
+        )
         return StrategyDecision(
             acted=True,
             reasoning=reasoning,

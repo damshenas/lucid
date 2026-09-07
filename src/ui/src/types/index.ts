@@ -125,7 +125,7 @@ export interface GitSyncResult {
 
 export interface ResetTradingDataResult {
   reset: Record<string, { orders: number; signal_outcomes: number; signals: number; decisions: number; positions: number }>;
-  synced: Record<string, { synced?: number; closed?: number; error?: string }>;
+  synced: Record<string, Record<string, { synced?: number; closed?: number; error?: string }>>;
 }
 
 export interface PriceCoverageRow {

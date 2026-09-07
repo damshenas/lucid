@@ -109,9 +109,12 @@ export function Users() {
     setError(null);
     try {
       const result = await api.resetTradingData(u.id, true);
-      const sync = result.synced[u.username];
-      if (sync?.error) {
-        setError(`Reset done, but broker sync failed: ${sync.error}`);
+      const perAssetClass = result.synced[u.username] ?? {};
+      const errors = Object.entries(perAssetClass)
+        .filter(([, r]) => r.error)
+        .map(([assetClass, r]) => `${assetClass}: ${r.error}`);
+      if (errors.length > 0) {
+        setError(`Reset done, but broker sync failed for some asset classes — ${errors.join("; ")}`);
       }
     } catch (err) {
       setError((err as Error).message);

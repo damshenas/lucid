@@ -47,7 +47,11 @@ class ResetPasswordIn(BaseModel):
 
 class ResetTradingDataIn(BaseModel):
     user_id: int | None = None
-    asset_class: str = AssetClass.equity.value
+    # None (default) resyncs every asset class after the wipe — the wipe itself is
+    # never scoped to one asset class (see reset_trading_data below), so restoring
+    # only one would leave the trader's other-asset-class holdings undetected
+    # locally even though the broker still holds them (bugs.md finding 6).
+    asset_class: str | None = None
     sync_from_broker: bool = True
 
 
@@ -92,18 +96,31 @@ async def update_user(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
 
     updates: dict[str, Any] = {}
+    # Any change that would leave the install with zero active admins is rejected —
+    # a role change away from admin is just as capable of doing that as
+    # deactivation, and previously only deactivation was guarded (bugs.md finding 10).
+    would_lose_admin = (
+        target.role == Role.admin.value
+        and target.is_active
+        and (
+            (body.role is not None and body.role.value != Role.admin.value)
+            or body.is_active is False
+        )
+    )
+    if would_lose_admin:
+        others = await repo.get_all()
+        active_admins = [
+            u for u in others if u.role == Role.admin.value and u.is_active and u.id != target.id
+        ]
+        if not active_admins:
+            action = "demote" if body.role is not None else "deactivate"
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, f"cannot {action} the last active admin"
+            )
+
     if body.role is not None:
         updates["role"] = body.role.value
     if body.is_active is not None:
-        if body.is_active is False and target.role == Role.admin.value:
-            others = await repo.get_all()
-            active_admins = [
-                u for u in others if u.role == Role.admin.value and u.is_active and u.id != target.id
-            ]
-            if not active_admins:
-                raise HTTPException(
-                    status.HTTP_409_CONFLICT, "cannot deactivate the last active admin"
-                )
         updates["is_active"] = body.is_active
 
     target = await repo.update(target, **updates)
@@ -294,15 +311,24 @@ async def reset_trading_data(
 
     sync_results: dict[str, Any] = {}
     if body.sync_from_broker:
+        # A None asset_class means "every asset class" — the wipe above already
+        # deleted positions across all of them, so restoring only one (the old
+        # default-to-equity behavior) silently dropped a trader's other-asset-class
+        # holdings from local state while the broker still held them. Any asset
+        # class without configured credentials just reports its own error below
+        # (never fails the whole request, matching the existing single-class path).
+        asset_classes = [body.asset_class] if body.asset_class is not None else list(AssetClass)
         for user in targets:
-            try:
-                sync_results[user.username] = await sync_positions_from_broker(
-                    ctx, session, user.id, body.asset_class
-                )
-            except CredentialNotConfiguredError as exc:
-                sync_results[user.username] = {"error": str(exc)}
-            except Exception as exc:  # noqa: BLE001
-                sync_results[user.username] = {"error": str(exc)}
+            per_class: dict[str, Any] = {}
+            for asset_class in asset_classes:
+                ac = asset_class.value if isinstance(asset_class, AssetClass) else asset_class
+                try:
+                    per_class[ac] = await sync_positions_from_broker(ctx, session, user.id, ac)
+                except CredentialNotConfiguredError as exc:
+                    per_class[ac] = {"error": str(exc)}
+                except Exception as exc:  # noqa: BLE001
+                    per_class[ac] = {"error": str(exc)}
+            sync_results[user.username] = per_class
         await session.commit()
 
     return {"reset": reset_counts, "synced": sync_results}

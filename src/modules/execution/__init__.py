@@ -53,6 +53,17 @@ async def _maybe_await(value: Any) -> Any:
     return value
 
 
+_ORDER_STATUS_VALUES = {s.value for s in OrderStatus}
+
+
+def _normalize_order_status(status: str) -> str:
+    """A broker-reported status that isn't one of Lucid's known ``OrderStatus``
+    values fails closed to ``pending`` rather than being trusted as-is, so an
+    unrecognized status still gets picked up by reconcile_pending_orders instead of
+    being silently misrepresented."""
+    return status if status in _ORDER_STATUS_VALUES else OrderStatus.pending.value
+
+
 class ExecutionEngine:
     def __init__(
         self,
@@ -75,8 +86,8 @@ class ExecutionEngine:
         bus.subscribe(BuySignalEvent, self.handle_buy)
         bus.subscribe(SellSignalEvent, self.handle_sell)
 
-    def _lock(self, user_id: int, ticker: str) -> asyncio.Lock:
-        key = (user_id, ticker)
+    def _lock(self, user_id: int, ticker: str, asset_class: str) -> asyncio.Lock:
+        key = (user_id, ticker, asset_class)
         if key not in self._locks:
             self._locks[key] = asyncio.Lock()
         return self._locks[key]
@@ -90,7 +101,7 @@ class ExecutionEngine:
         await self._publish(OrderRejectedEvent(user_id=user_id, ticker=ticker, side=side, reason=reason))
 
     async def handle_buy(self, event: BuySignalEvent) -> None:
-        async with self._lock(event.user_id, event.ticker):
+        async with self._lock(event.user_id, event.ticker, event.asset_class):
             config = await _maybe_await(self._config(event.user_id, event.asset_class))
             execution_cfg = config.get("execution", {})
             dedup_seconds = int(execution_cfg.get("dedup_window_seconds", 300))
@@ -113,7 +124,10 @@ class ExecutionEngine:
                     signal_service = SignalService(session)
                     signal = await SignalRepository(session).get_by_id(signal_id)
 
-                    if await positions.get_open_by_ticker(event.user_id, event.ticker) is not None:
+                    if (
+                        await positions.get_open_by_ticker(event.user_id, event.ticker, event.asset_class)
+                        is not None
+                    ):
                         await signal_service.mark_blocked(signal, reason="position already open")
                         await self._reject(event.ticker, event.user_id, "buy", "position already open")
                         return
@@ -147,6 +161,25 @@ class ExecutionEngine:
                         await self._reject(event.ticker, event.user_id, "buy", reason)
                         return
 
+                    if result.status != OrderStatus.filled.value:
+                        # Broker accepted the order but hasn't confirmed a fill yet
+                        # (e.g. "pending") — never mutate position state on anything
+                        # short of a confirmed fill. Persisted as pending and finalized
+                        # later by reconcile_pending_orders once the broker settles it.
+                        await orders.create(
+                            user_id=event.user_id,
+                            ticker=event.ticker,
+                            asset_class=event.asset_class,
+                            side=OrderSide.buy.value,
+                            quantity=quantity,
+                            price=result.avg_price,
+                            status=_normalize_order_status(result.status),
+                            broker_order_id=result.broker_order_id,
+                            paper=result.paper,
+                        )
+                        await signal_service.mark_acted(signal)
+                        return
+
                     fill_price = result.avg_price or price
                     now = datetime.now(timezone.utc)
                     position = await positions.create(
@@ -155,12 +188,14 @@ class ExecutionEngine:
                         asset_class=event.asset_class,
                         quantity=quantity,
                         avg_price=fill_price,
+                        high_water_mark=fill_price,
                         status=PositionStatus.open.value,
                         opened_at=now,
                     )
                     await orders.create(
                         user_id=event.user_id,
                         ticker=event.ticker,
+                        asset_class=event.asset_class,
                         side=OrderSide.buy.value,
                         quantity=quantity,
                         price=fill_price,
@@ -190,7 +225,7 @@ class ExecutionEngine:
             )
 
     async def handle_sell(self, event: SellSignalEvent) -> None:
-        async with self._lock(event.user_id, event.ticker):
+        async with self._lock(event.user_id, event.ticker, event.asset_class):
             # No dedup check for sells (unlike handle_buy) — a legitimate partial exit
             # followed shortly by a second sell of the remainder is normal, expected
             # behavior, not signal spam; selling is already naturally gated below by
@@ -207,10 +242,25 @@ class ExecutionEngine:
                     signal_service = SignalService(session)
                     signal = await SignalRepository(session).get_by_id(signal_id)
 
-                    position = await positions.get_open_by_ticker(event.user_id, event.ticker)
+                    position = await positions.get_open_by_ticker(
+                        event.user_id, event.ticker, event.asset_class
+                    )
                     if position is None:
                         await signal_service.mark_blocked(signal, reason="no open position")
                         await self._reject(event.ticker, event.user_id, "sell", "no open position")
+                        return
+
+                    if event.profit_tier is not None and getattr(
+                        position, f"profit_tier{event.profit_tier}_taken"
+                    ):
+                        # Reloaded fresh under this ticker's lock — if it's already
+                        # marked, a concurrent/overlapping strategy evaluation raced
+                        # this same tier and already won (bugs.md finding 7). Without
+                        # this check a second identical tier event would sell the
+                        # configured percentage of whatever remains all over again.
+                        reason = f"profit tier {event.profit_tier} already taken"
+                        await signal_service.mark_blocked(signal, reason=reason)
+                        await self._reject(event.ticker, event.user_id, "sell", reason)
                         return
 
                     if event.quantity_pct is None:
@@ -232,6 +282,22 @@ class ExecutionEngine:
                         reason = result.reason or "broker rejected"
                         await signal_service.mark_blocked(signal, reason=reason)
                         await self._reject(event.ticker, event.user_id, "sell", reason)
+                        return
+
+                    if result.status != OrderStatus.filled.value:
+                        await orders.create(
+                            user_id=event.user_id,
+                            ticker=event.ticker,
+                            asset_class=event.asset_class,
+                            side=OrderSide.sell.value,
+                            quantity=quantity,
+                            price=result.avg_price,
+                            status=_normalize_order_status(result.status),
+                            broker_order_id=result.broker_order_id,
+                            position_id=position.id,
+                            paper=result.paper,
+                        )
+                        await signal_service.mark_acted(signal)
                         return
 
                     fill_price = result.avg_price or price
@@ -300,7 +366,7 @@ class ExecutionEngine:
         if quantity <= 0:
             raise ManualOrderError("quantity must be positive")
 
-        async with self._lock(user_id, ticker):
+        async with self._lock(user_id, ticker, asset_class):
             async with self._db.transaction() as session:
                 signal = await SignalService(session).store(
                     user_id=user_id,
@@ -319,7 +385,7 @@ class ExecutionEngine:
                     signal_service = SignalService(session)
                     signal = await SignalRepository(session).get_by_id(signal_id)
 
-                    position = await positions.get_open_by_ticker(user_id, ticker)
+                    position = await positions.get_open_by_ticker(user_id, ticker, asset_class)
 
                     if side == OrderSide.sell.value:
                         if position is None or position.quantity <= 0:
@@ -341,6 +407,32 @@ class ExecutionEngine:
                         await signal_service.mark_blocked(signal, reason=reason)
                         raise ManualOrderError(reason)
 
+                    if result.status != OrderStatus.filled.value:
+                        # Not yet confirmed filled — persist as pending, don't touch
+                        # position state; reconcile_pending_orders finalizes it later.
+                        order = await orders.create(
+                            user_id=user_id,
+                            ticker=ticker,
+                            asset_class=asset_class,
+                            side=side,
+                            quantity=quantity,
+                            price=result.avg_price,
+                            status=_normalize_order_status(result.status),
+                            broker_order_id=result.broker_order_id,
+                            position_id=position.id if position else None,
+                            paper=result.paper,
+                        )
+                        await signal_service.mark_acted(signal)
+                        return {
+                            "id": order.id,
+                            "ticker": order.ticker,
+                            "side": order.side,
+                            "quantity": order.quantity,
+                            "price": order.price,
+                            "status": order.status,
+                            "paper": order.paper,
+                        }
+
                     fill_price = result.avg_price
                     if fill_price is None:
                         fill_price = float(await _maybe_await(self._quote(ticker)))
@@ -354,6 +446,7 @@ class ExecutionEngine:
                                 asset_class=asset_class,
                                 quantity=quantity,
                                 avg_price=fill_price,
+                                high_water_mark=fill_price,
                                 status=PositionStatus.open.value,
                                 opened_at=now,
                             )
@@ -380,6 +473,7 @@ class ExecutionEngine:
                     order = await orders.create(
                         user_id=user_id,
                         ticker=ticker,
+                        asset_class=asset_class,
                         side=side,
                         quantity=quantity,
                         price=fill_price,
@@ -420,6 +514,112 @@ class ExecutionEngine:
             "status": order.status,
             "paper": order.paper,
         }
+
+    async def reconcile_pending_orders(self) -> None:
+        """Poll the broker for every order still recorded as ``pending`` (see
+        handle_buy/handle_sell/place_manual_order) and finalize it: apply the
+        position mutation only once the broker confirms ``filled``; mark
+        ``rejected``/``cancelled`` orders as such with no position change; leave a
+        still-pending order untouched for the next pass."""
+        async with self._db.session() as session:
+            pending = await OrderRepository(session).list_pending()
+        for order in pending:
+            if not order.broker_order_id:
+                continue
+            try:
+                broker = await _maybe_await(self._resolve_broker(order.user_id, order.asset_class))
+                result = await broker.get_order_status(order.broker_order_id)
+            except Exception as exc:  # noqa: BLE001 - try the rest, this one stays pending
+                _logger.warning("reconcile: status check failed for order %s: %s", order.id, exc)
+                continue
+            async with self._lock(order.user_id, order.ticker, order.asset_class):
+                try:
+                    await self._apply_reconciled_order(order.id, result)
+                except Exception as exc:  # noqa: BLE001 - never let one bad order stop the batch
+                    _logger.error("reconcile: failed to apply order %s: %s", order.id, exc)
+
+    async def _apply_reconciled_order(self, order_id: int, result: Any) -> None:
+        fill_event_kwargs: dict[str, Any] | None = None
+        async with self._db.transaction() as session:
+            orders = OrderRepository(session)
+            order = await orders.get_by_id(order_id)
+            if order is None or order.status != OrderStatus.pending.value:
+                return  # already reconciled by a previous/concurrent pass
+
+            if result.status in (OrderStatus.rejected.value, OrderStatus.cancelled.value):
+                await orders.update(order, status=result.status)
+                await self._publish(
+                    OrderRejectedEvent(
+                        user_id=order.user_id,
+                        ticker=order.ticker,
+                        side=order.side,
+                        reason=result.reason or f"broker reported {result.status}",
+                    )
+                )
+                return
+
+            if result.status != OrderStatus.filled.value:
+                return  # still pending — nothing to do yet
+
+            positions = PositionRepository(session)
+            fill_price = result.avg_price or order.price or 0.0
+            now = datetime.now(timezone.utc)
+            position = await positions.get_open_by_ticker(order.user_id, order.ticker, order.asset_class)
+
+            if order.side == OrderSide.buy.value:
+                if position is None:
+                    position = await positions.create(
+                        user_id=order.user_id,
+                        ticker=order.ticker,
+                        asset_class=order.asset_class,
+                        quantity=order.quantity,
+                        avg_price=fill_price,
+                        high_water_mark=fill_price,
+                        status=PositionStatus.open.value,
+                        opened_at=now,
+                    )
+                else:
+                    total_qty = position.quantity + order.quantity
+                    new_avg = (
+                        position.avg_price * position.quantity + fill_price * order.quantity
+                    ) / total_qty
+                    position = await positions.update(position, quantity=total_qty, avg_price=new_avg)
+            else:
+                if position is None:
+                    # Position was already fully closed by something else in the
+                    # meantime (e.g. a manual sell) — nothing left to reduce.
+                    _logger.warning(
+                        "reconcile: sell order %s filled but no open position for %s/%s",
+                        order.id,
+                        order.user_id,
+                        order.ticker,
+                    )
+                else:
+                    remaining = position.quantity - order.quantity
+                    if remaining <= 1e-9:
+                        position = await positions.update(
+                            position, quantity=0.0, status=PositionStatus.closed.value, closed_at=now
+                        )
+                    else:
+                        position = await positions.update(position, quantity=remaining)
+
+            fill_event_kwargs = {
+                "user_id": order.user_id,
+                "ticker": order.ticker,
+                "side": order.side,
+                "quantity": order.quantity,
+                "price": fill_price,
+                "paper": order.paper,
+            }
+            await orders.update(
+                order,
+                status=OrderStatus.filled.value,
+                price=fill_price,
+                position_id=position.id if position is not None else order.position_id,
+            )
+
+        if fill_event_kwargs is not None:
+            await self._publish(OrderFilledEvent(**fill_event_kwargs))
 
 
 __all__ = ["ExecutionEngine", "ManualOrderError"]

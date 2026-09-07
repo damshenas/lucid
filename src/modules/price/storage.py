@@ -56,3 +56,23 @@ def list_intervals(storage_path: str | Path) -> list[str]:
     if not root.is_dir():
         return []
     return sorted(p.name for p in root.iterdir() if p.is_dir())
+
+
+def latest_price(
+    storage_path: str | Path, ticker: str, intervals: tuple[str, ...] = ("1m", "1h", "1d")
+) -> float | None:
+    """Most recent stored close across whichever of ``intervals`` has bars for this
+    ticker — newest timestamp wins, so a stop-loss/tier check or an order's sizing
+    quote uses fresh intraday data when it exists instead of always falling back to a
+    stale daily close (bugs.md finding 3). ``None`` if no bars exist in any interval."""
+    best_ts = None
+    best_close: float | None = None
+    for interval in intervals:
+        df = read_bars(storage_path, ticker, interval)
+        if df is None or df.empty:
+            continue
+        ts = df.index.max()
+        if best_ts is None or ts > best_ts:
+            best_ts = ts
+            best_close = float(df["close"].iloc[-1])
+    return best_close

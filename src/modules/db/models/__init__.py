@@ -13,6 +13,7 @@ from .base import (
     SignalStatus,
     TimestampMixin,
 )
+from .bootstrap import BootstrapLock
 from .config import UserConfig
 from .credential import Credential
 from .decision import StrategyDecisionLog
@@ -28,6 +29,7 @@ __all__ = [
     "AppLog",
     "AssetClass",
     "Base",
+    "BootstrapLock",
     "Credential",
     "Direction",
     "Order",

@@ -21,6 +21,11 @@ class PositionView:
     # for a freshly (re)opened position.
     tier1_taken: bool = False
     tier2_taken: bool = False
+    # Highest price observed since entry (see Position.high_water_mark / bumped by
+    # PositionRepository.bump_high_water_mark in TradingRuntime._evaluate_sell) — a
+    # trailing-stop strategy should trail from this, not avg_price. None only for a
+    # not-yet-migrated row; callers should treat that as "use avg_price".
+    high_water_mark: float | None = None
 
 
 @dataclass(slots=True)
@@ -31,6 +36,12 @@ class StrategyContext:
     config: dict[str, Any] = field(default_factory=dict)
     price_data: Any | None = None  # pandas DataFrame of OHLCV
     position: PositionView | None = None
+    # Latest known price across daily AND intraday stored bars, whichever is more
+    # recent (see src.modules.price.storage.latest_price) — a strategy that needs a
+    # current quote for a stop/tier check should prefer this over
+    # ``price_data["close"].iloc[-1]``, which only ever reflects the daily close.
+    # ``None`` only if no bars are stored yet at all.
+    current_price: float | None = None
     # Populated only for the sources this strategy declared via its module-level
     # EXTERNAL_SOURCES list (see src/modules/strategy/loader.py) — empty otherwise.
     # See src/modules/signal/sources.py for what counts as a "source" and how a

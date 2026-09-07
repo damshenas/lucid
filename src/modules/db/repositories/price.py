@@ -10,6 +10,22 @@ from ..models.price import PriceFetchAttempt, PriceFetchLog, PriceWatchlist
 from .base import BaseRepository
 
 
+class WatchlistAssetClassConflictError(Exception):
+    """Raised when adding a ticker already on the watchlist under a *different*
+    asset_class — ticker is globally unique in this table (bugs.md finding 18), so
+    silently overwriting the existing row's asset_class would reclassify it out from
+    under whatever was tracking it (its own asset-class view, its broker, its
+    strategy context) instead of rejecting the conflicting add."""
+
+    def __init__(self, ticker: str, existing_asset_class: str) -> None:
+        self.ticker = ticker
+        self.existing_asset_class = existing_asset_class
+        super().__init__(
+            f"'{ticker}' is already on the watchlist as {existing_asset_class} — "
+            "remove it first to re-add it under a different asset class"
+        )
+
+
 class PriceWatchlistRepository(BaseRepository[PriceWatchlist]):
     model = PriceWatchlist
 
@@ -37,17 +53,24 @@ class PriceWatchlistRepository(BaseRepository[PriceWatchlist]):
         poll_interval: str = "1h",
         region: str = "us",
     ) -> PriceWatchlist:
-        """Add a ticker to the watchlist, or update its asset class/enabled
-        flag/poll interval/region if it's already there — this is what makes a ticker
-        a *buy-side* candidate: polled for prices (see TradingRuntime._pipeline, which
-        also covers any ticker with an open position regardless of watchlist
-        membership) and evaluated by active buy strategies (see
-        TradingRuntime.run_strategies). Sell strategies don't need a watchlist entry
-        at all — they run over the user's open positions directly."""
+        """Add a ticker to the watchlist, or update its enabled flag/poll interval/
+        region if it's already there — this is what makes a ticker a *buy-side*
+        candidate: polled for prices (see TradingRuntime._pipeline, which also covers
+        any ticker with an open position regardless of watchlist membership) and
+        evaluated by active buy strategies (see TradingRuntime.run_strategies). Sell
+        strategies don't need a watchlist entry at all — they run over the user's
+        open positions directly.
+
+        Ticker is globally unique in this table: an add for a ticker that's already
+        present under a *different* asset_class is rejected
+        (WatchlistAssetClassConflictError) rather than silently reclassifying the
+        existing row (bugs.md finding 18) — remove it first to genuinely switch its
+        asset class."""
         ticker = ticker.upper()
         existing = await self.get_by_ticker(ticker)
         if existing is not None:
-            existing.asset_class = asset_class
+            if existing.asset_class != asset_class:
+                raise WatchlistAssetClassConflictError(ticker, existing.asset_class)
             existing.enabled = enabled
             existing.poll_interval = poll_interval
             existing.region = region

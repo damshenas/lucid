@@ -15,7 +15,10 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
+from sqlalchemy.exc import IntegrityError
+
 from src.modules.db.models.base import Role
+from src.modules.db.models.bootstrap import BootstrapLock
 from src.modules.db.models.user import User
 from src.modules.db.repositories.user import UserRepository
 
@@ -54,6 +57,17 @@ class AuthService:
     async def bootstrap_first_admin(self, username: str, password: str) -> User:
         if await self.has_any_user():
             raise FirstRunError("first admin already exists; bootstrap is locked")
+        # The check above is a plain read then, further down, a write — two
+        # concurrent first-run requests can both observe zero users before either
+        # commits. Claiming this fixed-PK sentinel row in the same transaction is
+        # what actually serializes them: whichever request's insert commits first
+        # wins, the other gets a database-level integrity error here instead of both
+        # successfully becoming admin (bugs.md finding 8).
+        self._users.session.add(BootstrapLock(id=1))
+        try:
+            await self._users.session.flush()
+        except IntegrityError as exc:
+            raise FirstRunError("first admin already exists; bootstrap is locked") from exc
         return await self._users.create(
             username=username,
             password_hash=hash_password(password),
@@ -93,15 +107,18 @@ class AuthService:
             )
 
         if not verify_password(password, user.password_hash):
-            attempts = user.failed_login_attempts + 1
+            # Atomic DB-side increment (SET x = x + 1), not a python-level
+            # read-then-write — under concurrent wrong-password requests, a plain
+            # `user.failed_login_attempts + 1` read-then-write can lose updates (two
+            # requests both read 4, both write 5), letting far more than
+            # MAX_FAILED_ATTEMPTS guesses through before locking (bugs.md finding 9).
+            attempts = await self._users.increment_failed_attempts(user.id)
             if attempts >= MAX_FAILED_ATTEMPTS:
                 await self._users.update(
                     user,
                     failed_login_attempts=0,
                     locked_until=now + timedelta(minutes=LOCKOUT_MINUTES),
                 )
-            else:
-                await self._users.update(user, failed_login_attempts=attempts)
             raise InvalidCredentialsError("invalid username or password")
 
         if user.failed_login_attempts or user.locked_until is not None:

@@ -53,6 +53,7 @@ class ScheduleConfig(BaseModel):
     poll_positions_seconds: int = 300
     daily_price_hour: int = 22
     intraday_price_minutes: int = 15
+    reconcile_orders_seconds: int = 60
     # Gates intraday price-fetch jobs and strategy evaluation (run_strategies) by each
     # ticker's watchlist region (see PriceWatchlist.region,
     # src/modules/schedules/market_hours.py) — a closed-market ticker is skipped

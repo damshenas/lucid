@@ -29,6 +29,7 @@ class PaperBroker(Broker):
         self._prices: dict[str, float] = {}
         self._positions: dict[str, BrokerPosition] = {}
         self._order_seq = 0
+        self._orders: dict[str, OrderResult] = {}
 
     def set_price(self, ticker: str, price: float) -> None:
         self._prices[ticker] = price
@@ -70,7 +71,7 @@ class PaperBroker(Broker):
             if existing.quantity <= 1e-9:
                 self._positions.pop(ticker, None)
 
-        return OrderResult(
+        result = OrderResult(
             ticker=ticker,
             quantity=quantity,
             status="filled",
@@ -78,6 +79,8 @@ class PaperBroker(Broker):
             avg_price=price,
             paper=True,
         )
+        self._orders[order_id] = result
+        return result
 
     async def get_positions(self) -> list[BrokerPosition]:
         for pos in self._positions.values():
@@ -91,3 +94,11 @@ class PaperBroker(Broker):
     async def cancel_order(self, broker_order_id: str) -> bool:
         # Paper orders fill immediately; nothing to cancel.
         return False
+
+    async def get_order_status(self, broker_order_id: str) -> OrderResult:
+        # Paper orders fill immediately, so any previously placed order is always
+        # already filled by the time this is called.
+        cached = self._orders.get(broker_order_id)
+        if cached is not None:
+            return cached
+        return OrderResult(broker_order_id, 0.0, "rejected", paper=True, reason="unknown order")

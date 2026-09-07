@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from sqlalchemy import delete, select
 
+from ..models.base import OrderStatus
 from ..models.order import Order
 from .base import BaseRepository
 
@@ -19,6 +20,13 @@ class OrderRepository(BaseRepository[Order]):
             .limit(limit)
             .offset(offset)
         )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def list_pending(self) -> list[Order]:
+        """Every order not yet confirmed filled/rejected/cancelled by the broker —
+        used by ExecutionEngine.reconcile_pending_orders (bugs.md finding 2)."""
+        stmt = select(Order).where(Order.status == OrderStatus.pending.value)
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 

@@ -186,6 +186,18 @@ class Trading212Broker(Broker):
             _logger.warning("cancel_order failed for %s: %s", broker_order_id, exc)
             return False
 
+    async def get_order_status(self, broker_order_id: str) -> OrderResult:
+        data = await self._client.request("GET", f"/api/v0/equity/orders/{broker_order_id}") or {}
+        raw_ticker = data.get("ticker") or (data.get("instrument") or {}).get("ticker", "")
+        return OrderResult(
+            ticker=str(raw_ticker).split("_")[0],
+            quantity=float(data.get("quantity", 0.0) or 0.0),
+            status=str(data.get("status", "pending")).lower(),
+            broker_order_id=broker_order_id,
+            avg_price=data.get("fillPrice"),
+            paper=self._paper,
+        )
+
 
 __all__ = [
     "DEMO_BASE_URL",

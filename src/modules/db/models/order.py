@@ -5,7 +5,7 @@ from __future__ import annotations
 from sqlalchemy import Boolean, Float, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column
 
-from .base import Base, OrderStatus, TimestampMixin
+from .base import AssetClass, Base, OrderStatus, TimestampMixin
 
 
 class Order(Base, TimestampMixin):
@@ -16,6 +16,7 @@ class Order(Base, TimestampMixin):
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     ticker: Mapped[str] = mapped_column(String(30), nullable=False)
+    asset_class: Mapped[str] = mapped_column(String(20), default=AssetClass.equity.value, nullable=False)
     side: Mapped[str] = mapped_column(String(10), nullable=False)
     quantity: Mapped[float] = mapped_column(Float, nullable=False)
     price: Mapped[float | None] = mapped_column(Float, nullable=True)

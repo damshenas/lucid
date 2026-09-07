@@ -450,3 +450,76 @@ with the codebase. Newest entries at the bottom.
      against Trading212's own demo account (needs its own real Trading212 API
      credentials tied to that demo account), not a fully-local zero-credential
      simulator. Do not "fix" this again without re-reading that test first.
+
+- 2026-09-07 — fixed all 11 Critical/High findings from `docs/bugs.md` (1,2,3,4,5,
+  6,7,8,9,10,18); findings 11-17,19-22 deliberately left unfixed (out of scope for
+  this pass, still open in bugs.md). Notable implementation decisions/gotchas:
+  - **Position identity (1+5):** `uq_position_user_ticker` replaced with a partial
+    unique `Index` scoped to `status='open'` on `(user_id, ticker, asset_class)` —
+    closed rows can repeat freely (round-trip history preserved), and the same
+    ticker can be open in two asset classes at once. `get_open_by_ticker` now takes
+    `asset_class`; the execution engine's per-ticker `asyncio.Lock` key gained
+    `asset_class` too. Migration 0012. Note: signal-level dedup
+    (`SignalRepository.recent_for_ticker`) is still keyed by `(user, ticker,
+    direction)` only, NOT asset_class — a latent gap, not fixed here, tests had to
+    pass `dedup_window_seconds=0` to exercise the position-identity behavior in
+    isolation.
+  - **Pending orders (2):** only a broker-confirmed `filled` status now
+    opens/mutates a position or publishes `OrderFilledEvent`; anything else is
+    persisted as `pending` (new `Order.asset_class` column, migration 0013) and
+    reconciled by a new scheduled job (`reconcile_orders`, every
+    `schedule.reconcile_orders_seconds`, default 60s) that polls
+    `Broker.get_order_status` (new abstract method, implemented on both
+    `PaperBroker` and `Trading212Broker`) and finalizes fill/reject there instead.
+  - **Reset trading data (6):** `ResetTradingDataIn.asset_class` is now
+    `str | None` (`None` = every asset class) — the wipe was never scoped to one
+    asset class, so the resync wasn't either. **Response shape changed**:
+    `synced` is now `{username: {asset_class: {...}}}` (was flat
+    `{username: {...}}`) — updated `src/ui/src/types/index.ts` and
+    `pages/Users.tsx` accordingly.
+  - **Profit tier race (7):** `handle_sell` re-checks
+    `position.profit_tier{N}_taken` (freshly reloaded under the per-ticker lock)
+    before selling — relies on the same lock already serializing overlapping
+    `run_strategies()` passes (scheduler vs. activation-triggered background task)
+    for this to actually close the race.
+  - **Stale prices (3):** new `storage.latest_price()` picks the freshest close
+    across `1m`/`1h`/`1d` files by timestamp. `StrategyContext.current_price` (new
+    field) carries this into strategy evaluation; `trailing_stop.py` uses it for
+    stop/tier comparisons (ATR/SMA still computed from the daily dataframe).
+    `_watchlist_by_poll_interval("1h")` now also includes any open position not on
+    the watchlist at all (defaulted to `market_hours.US`).
+  - **Trailing stop doesn't trail (4):** new `Position.high_water_mark` column
+    (migration 0014, backfilled to `avg_price` for existing open rows) +
+    `PositionRepository.bump_high_water_mark` (monotonic, no-op write if not a new
+    peak). `TradingRuntime._evaluate_sell` refetches the position **by id** before
+    bumping it — reusing the ORM object from the outer `run_strategies()` loop
+    (loaded on an already-closed session) to write would hit the cross-session
+    gotcha documented above. `trailing_stop.py`'s stop now trails from
+    `high_water_mark`, not `avg_price`; profit tiers are unchanged (still measured
+    from entry). Bumped `STRATEGY_VERSION` 2.0.0 -> 2.1.0.
+  - **Concurrent bootstrap (8):** new single-row sentinel table
+    (`BootstrapLock`, fixed `id=1`, migration 0015) — `bootstrap_first_admin`
+    inserts+flushes it before creating the user and catches `IntegrityError`; the
+    plain `has_any_user()` count check alone is not atomic under concurrency.
+  - **Concurrent failed logins (9):** `UserRepository.increment_failed_attempts`
+    does an atomic DB-side `SET failed_login_attempts = failed_login_attempts + 1
+    RETURNING ...` instead of a python-level read-then-write, which could lose
+    updates and let far more than `MAX_FAILED_ATTEMPTS` guesses through.
+  - **Last admin self-demotion (10):** `update_user`'s last-active-admin guard now
+    covers a role change away from admin, not just deactivation.
+  - **Watchlist asset-class identity (18):** deliberately did **not** do the same
+    invasive (schema+migration) treatment as position identity here, since
+    `PriceWatchlist.ticker` stays globally unique and the Settings > Watchlist chip
+    UI is genuinely ticker-keyed (making a same-ticker-two-asset-classes UI a real
+    frontend feature, not just a backend fix). Instead: `upsert()` now rejects a
+    conflicting asset_class (`WatchlistAssetClassConflictError` -> 409) instead of
+    silently overwriting the existing row's asset_class — this is the second
+    alternative bugs.md's own finding 18 write-up explicitly offered ("if ticker is
+    intentionally global, reject a conflicting add"). Had to update a pre-existing
+    test (`test_price_watchlist_repository_crud`) that asserted the old buggy
+    overwrite-on-conflict behavior.
+  - General gotcha reconfirmed: `replace_string_in_file` with an `oldString` that
+    ends mid-function can leave the ORIGINAL function's tail statements orphaned
+    right after a newly-inserted test — always re-read the resulting file after
+    inserting a new test between two existing ones, don't trust a "successful"
+    edit result alone.

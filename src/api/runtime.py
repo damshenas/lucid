@@ -63,10 +63,8 @@ class TradingRuntime:
     # -- providers for the execution engine --------------------------------
 
     def _quote(self, ticker: str) -> float:
-        df = storage.read_bars(self.ctx.settings.price.storage_path, ticker, "1d")
-        if df is None or df.empty:
-            return 0.0
-        return float(df["close"].iloc[-1])
+        price = storage.latest_price(self.ctx.settings.price.storage_path, ticker)
+        return price if price is not None else 0.0
 
     async def _config(self, user_id: int, asset_class: str | None) -> dict[str, Any]:
         async with self.ctx.db.session() as session:
@@ -97,14 +95,26 @@ class TradingRuntime:
         via ._watchlist() above regardless of this per-ticker choice. When
         ``schedule.market_hours_enabled`` is on (the default), a ticker whose
         region's market is currently closed (see market_hours.is_open) is skipped
-        until its session reopens."""
+        until its session reopens.
+
+        An open position that isn't on the watchlist at all (e.g. removed after
+        buying) still needs intraday updates to catch an intraday stop/tier cross
+        (bugs.md finding 3) — it's defaulted to the "1h" granularity here, since it
+        has no per-ticker chip choice of its own to read.
+        """
         async with self.ctx.db.session() as session:
             rows = await PriceWatchlistRepository(session).list_enabled()
+            position_tickers = {r.ticker for r in await PositionRepository(session).list_all_open()}
         gate_enabled = self.ctx.settings.schedule.market_hours_enabled
+        watchlist_tickers = {r.ticker for r in rows}
+        selected = {r.ticker: r.region for r in rows if r.poll_interval == poll_interval}
+        if poll_interval == "1h":
+            for ticker in position_tickers - watchlist_tickers:
+                selected.setdefault(ticker, market_hours.US)
         return [
-            r.ticker
-            for r in rows
-            if r.poll_interval == poll_interval and (not gate_enabled or market_hours.is_open(r.region))
+            ticker
+            for ticker, region in selected.items()
+            if not gate_enabled or market_hours.is_open(region)
         ]
 
     async def _mark_fetched(self, ticker: str, interval: str, rows: int, duration: float) -> None:
@@ -350,6 +360,18 @@ class TradingRuntime:
         self, user_id: int, position, df, values, sell: LoadedStrategy, benchmark_data=None
     ) -> None:
         external = await self._external_signals(user_id, position.ticker, sell.external_sources)
+        current_price = storage.latest_price(self.ctx.settings.price.storage_path, position.ticker)
+        high_water_mark = position.high_water_mark
+        if current_price is not None:
+            # Refetch by id rather than reusing `position` (loaded on a session that's
+            # already closed by the time we get here) — bump_high_water_mark writes,
+            # and a detached cross-session ORM object must never be passed into a
+            # repository write (see docs/agent-notes.md cross-session gotcha).
+            async with self.ctx.db.transaction() as session:
+                fresh = await PositionRepository(session).get_by_id(position.id)
+                if fresh is not None:
+                    updated = await PositionRepository(session).bump_high_water_mark(fresh, current_price)
+                    high_water_mark = updated.high_water_mark
         sell_decision = await sell.run(
             StrategyContext(
                 ticker=position.ticker,
@@ -357,12 +379,14 @@ class TradingRuntime:
                 asset_class=position.asset_class,
                 config=values,
                 price_data=df,
+                current_price=current_price,
                 position=PositionView(
                     position.ticker,
                     position.quantity,
                     position.avg_price,
                     tier1_taken=position.profit_tier1_taken,
                     tier2_taken=position.profit_tier2_taken,
+                    high_water_mark=high_water_mark,
                 ),
                 external_signals=external,
                 benchmark_data=benchmark_data,
@@ -393,6 +417,7 @@ class TradingRuntime:
             if external_signals is not None
             else await self._external_signals(user_id, item.ticker, buy.external_sources)
         )
+        current_price = storage.latest_price(self.ctx.settings.price.storage_path, item.ticker)
         buy_decision = await buy.run(
             StrategyContext(
                 ticker=item.ticker,
@@ -400,6 +425,7 @@ class TradingRuntime:
                 asset_class=item.asset_class,
                 config=values,
                 price_data=df,
+                current_price=current_price,
                 external_signals=external,
                 benchmark_data=benchmark_data,
             )
@@ -484,6 +510,11 @@ class TradingRuntime:
             self.run_strategies,
             id="run_strategies",
             seconds=max(30, schedule.poll_positions_seconds),
+        )
+        self.scheduler.add_interval_job(
+            self.execution.reconcile_pending_orders,
+            id="reconcile_orders",
+            seconds=max(10, schedule.reconcile_orders_seconds),
         )
 
     # -- lifecycle ---------------------------------------------------------

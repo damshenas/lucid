@@ -399,6 +399,41 @@ def test_admin_cannot_delete_or_deactivate_last_admin(client: TestClient) -> Non
     assert resp.status_code == 409
 
 
+def test_admin_cannot_demote_the_last_active_admin(client: TestClient) -> None:
+    """Regression test for bugs.md finding 10: a role change away from admin is
+    just as capable of leaving zero active admins as deactivation — must be
+    rejected the same way."""
+    setup = client.post(
+        "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
+    ).json()
+    admin_token = setup["access_token"]
+    admin_id = client.get("/api/v1/admin/users", headers=_auth(admin_token)).json()[0]["id"]
+
+    resp = client.patch(
+        f"/api/v1/admin/users/{admin_id}",
+        headers=_auth(admin_token),
+        json={"role": "trader"},
+    )
+    assert resp.status_code == 409
+    # Unchanged.
+    assert (
+        client.get("/api/v1/admin/users", headers=_auth(admin_token)).json()[0]["role"] == "admin"
+    )
+
+    # A second admin makes demoting the first one fine.
+    client.post(
+        "/api/v1/admin/users",
+        headers=_auth(admin_token),
+        json={"username": "root2", "password": "password123", "role": "admin"},
+    )
+    resp = client.patch(
+        f"/api/v1/admin/users/{admin_id}",
+        headers=_auth(admin_token),
+        json={"role": "trader"},
+    )
+    assert resp.status_code == 200
+
+
 def test_manual_order_trader_only(client: TestClient) -> None:
     admin_token = client.post(
         "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
@@ -589,6 +624,89 @@ def test_admin_reset_trading_data_wipes_history_and_resyncs(client: TestClient) 
     # The trader account itself (and its role) is untouched by the reset.
     users = client.get("/api/v1/admin/users", headers=_auth(admin_token)).json()
     assert any(u["id"] == trader_id and u["role"] == "trader" for u in users)
+
+
+def test_intraday_watchlist_includes_held_position_not_on_watchlist(
+    client: TestClient, monkeypatch
+) -> None:
+    """Regression test for bugs.md finding 3: a held position removed from (or never
+    added to) the watchlist must still get intraday ("1h" default) bars, not just the
+    daily fetch — otherwise an intraday stop/tier cross would never be observed
+    before the next daily bar."""
+    monkeypatch.setattr(market_hours, "is_open", lambda region, now=None: True)
+    admin_token = client.post(
+        "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
+    ).json()["access_token"]
+    client.post(
+        "/api/v1/admin/users",
+        headers=_auth(admin_token),
+        json={"username": "trader10", "password": "traderpass", "role": "trader"},
+    )
+    token = client.post(
+        "/api/v1/auth/login", json={"username": "trader10", "password": "traderpass"}
+    ).json()["access_token"]
+
+    # AMZN is never added to the watchlist at all.
+    assert client.get("/api/v1/prices/watchlist", headers=_auth(token)).json() == []
+    resp = client.post(
+        "/api/v1/orders/manual",
+        headers=_auth(token),
+        json={"ticker": "AMZN", "side": "buy", "quantity": 1},
+    )
+    assert resp.status_code == 201
+
+    runtime: TradingRuntime = client.app.state.runtime
+    hourly = asyncio.run(runtime._watchlist_by_poll_interval("1h"))
+    minutely = asyncio.run(runtime._watchlist_by_poll_interval("1m"))
+    assert "AMZN" in hourly
+    assert "AMZN" not in minutely
+
+
+def test_admin_reset_trading_data_resyncs_every_asset_class(client: TestClient) -> None:
+    """Regression test for bugs.md finding 6: the reset wipes ALL of a trader's
+    positions across every asset class, so the post-wipe resync must cover every
+    asset class too, not just the (previously hardcoded default) equity one — a
+    trader holding both equity and crypto must get both back."""
+    admin_token = client.post(
+        "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
+    ).json()["access_token"]
+    client.post(
+        "/api/v1/admin/users",
+        headers=_auth(admin_token),
+        json={"username": "trader9", "password": "traderpass", "role": "trader"},
+    )
+    trader_id = next(
+        u["id"]
+        for u in client.get("/api/v1/admin/users", headers=_auth(admin_token)).json()
+        if u["username"] == "trader9"
+    )
+    token = client.post(
+        "/api/v1/auth/login", json={"username": "trader9", "password": "traderpass"}
+    ).json()["access_token"]
+
+    client.post(
+        "/api/v1/orders/manual",
+        headers=_auth(token),
+        json={"ticker": "AAPL", "side": "buy", "quantity": 1},
+    )
+    client.post(
+        "/api/v1/orders/manual",
+        headers=_auth(token),
+        json={"ticker": "BTC", "side": "buy", "quantity": 1, "asset_class": "crypto"},
+    )
+    assert len(client.get("/api/v1/positions", headers=_auth(token)).json()) == 2
+
+    resp = client.post(
+        "/api/v1/admin/reset-trading-data",
+        headers=_auth(admin_token),
+        json={"user_id": trader_id},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["reset"]["trader9"]["positions"] == 2
+
+    positions_after = client.get("/api/v1/positions", headers=_auth(token)).json()
+    tickers = {p["ticker"] for p in positions_after}
+    assert tickers == {"AAPL", "BTC"}
 
 
 def test_admin_reports_permission_and_empty_state(client: TestClient) -> None:
@@ -832,6 +950,44 @@ def test_price_watchlist_crud(client: TestClient) -> None:
     assert remove.status_code == 204
     assert client.get("/api/v1/prices/watchlist", headers=_auth(trader_token)).json() == []
     assert client.delete("/api/v1/prices/watchlist/AMZN", headers=_auth(trader_token)).status_code == 404
+
+
+def test_watchlist_add_rejects_asset_class_conflict_instead_of_reclassifying(
+    client: TestClient,
+) -> None:
+    """Regression test for bugs.md finding 18: adding a ticker already on the
+    watchlist under a *different* asset_class used to silently overwrite the
+    existing row's asset_class — it must now be rejected with a 409, leaving the
+    original entry untouched."""
+    admin_token = client.post(
+        "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
+    ).json()["access_token"]
+    client.post(
+        "/api/v1/admin/users",
+        headers=_auth(admin_token),
+        json={"username": "trader11", "password": "traderpass", "role": "trader"},
+    )
+    token = client.post(
+        "/api/v1/auth/login", json={"username": "trader11", "password": "traderpass"}
+    ).json()["access_token"]
+
+    add = client.post(
+        "/api/v1/prices/watchlist",
+        headers=_auth(token),
+        json={"ticker": "BTCUSD", "asset_class": "crypto"},
+    )
+    assert add.status_code == 201
+
+    conflict = client.post(
+        "/api/v1/prices/watchlist",
+        headers=_auth(token),
+        json={"ticker": "BTCUSD", "asset_class": "fx"},
+    )
+    assert conflict.status_code == 409
+
+    listing = client.get("/api/v1/prices/watchlist", headers=_auth(token)).json()
+    assert len(listing) == 1
+    assert listing[0]["asset_class"] == "crypto"  # untouched by the rejected conflict
 
 
 def test_watchlist_disk_only_tickers_are_not_editable(tmp_path) -> None:

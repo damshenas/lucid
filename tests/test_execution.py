@@ -7,14 +7,62 @@ import asyncio
 import pytest
 
 from src.modules.broker import PaperBroker
-from src.modules.bus import BuySignalEvent, EventBus, OrderRejectedEvent, SellSignalEvent
+from src.modules.broker.base import AccountSummary, Broker, BrokerPosition, OrderResult
+from src.modules.bus import (
+    BuySignalEvent,
+    EventBus,
+    OrderFilledEvent,
+    OrderRejectedEvent,
+    SellSignalEvent,
+)
 from src.modules.db.connection import Database
-from src.modules.db.models.base import PositionStatus
+from src.modules.db.models.base import OrderStatus, PositionStatus
 from src.modules.db.repositories.order import OrderRepository
 from src.modules.db.repositories.position import PositionRepository
 from src.modules.db.repositories.signal import SignalRepository
 from src.modules.db.repositories.user import UserRepository
 from src.modules.execution import ExecutionEngine, ManualOrderError
+
+
+class _PendingThenSettleBroker(Broker):
+    """Test double: every order is placed as 'pending' and only resolves to a final
+    status once ``settle(broker_order_id, status, avg_price)`` is called — models a
+    real broker (e.g. Trading212) that doesn't confirm a fill synchronously."""
+
+    name = "pending-test"
+
+    def __init__(self) -> None:
+        self._seq = 0
+        self._results: dict[str, OrderResult] = {}
+
+    async def place_market_order(self, ticker: str, quantity: float, *, asset_class: str = "equity"):
+        self._seq += 1
+        order_id = f"pending-{self._seq}"
+        result = OrderResult(ticker=ticker, quantity=quantity, status="pending", broker_order_id=order_id)
+        self._results[order_id] = result
+        return result
+
+    def settle(self, broker_order_id: str, status: str, avg_price: float | None = None) -> None:
+        prior = self._results[broker_order_id]
+        self._results[broker_order_id] = OrderResult(
+            ticker=prior.ticker,
+            quantity=prior.quantity,
+            status=status,
+            broker_order_id=broker_order_id,
+            avg_price=avg_price,
+        )
+
+    async def get_order_status(self, broker_order_id: str) -> OrderResult:
+        return self._results[broker_order_id]
+
+    async def get_positions(self) -> list[BrokerPosition]:
+        return []
+
+    async def get_account_summary(self) -> AccountSummary:
+        return AccountSummary(cash=100_000.0, equity=100_000.0)
+
+    async def cancel_order(self, broker_order_id: str) -> bool:
+        return False
 
 
 async def _make_user(db: Database) -> int:
@@ -23,7 +71,9 @@ async def _make_user(db: Database) -> int:
         return user.id
 
 
-def _engine(db: Database, broker: PaperBroker, *, bus=None) -> ExecutionEngine:
+def _engine(
+    db: Database, broker: PaperBroker, *, bus=None, dedup_window_seconds: int = 300
+) -> ExecutionEngine:
     async def resolve(_uid: int, _ac: str) -> PaperBroker:
         return broker
 
@@ -32,7 +82,11 @@ def _engine(db: Database, broker: PaperBroker, *, bus=None) -> ExecutionEngine:
 
     async def config(_uid: int, _ac: str | None) -> dict:
         return {
-            "execution": {"quantity_mode": "fixed_usd", "fixed_usd": 1000.0},
+            "execution": {
+                "quantity_mode": "fixed_usd",
+                "fixed_usd": 1000.0,
+                "dedup_window_seconds": dedup_window_seconds,
+            },
         }
 
     return ExecutionEngine(
@@ -278,6 +332,51 @@ async def test_manual_sell_partial_reduces_position(db: Database) -> None:
     assert len([o for o in orders if o.side == "sell"]) == 1
 
 
+async def test_buy_after_full_sell_reopens_same_ticker(db: Database) -> None:
+    """Regression test for bugs.md finding 1: a closed position row used to
+    permanently block re-buying the same ticker (uq_position_user_ticker applied
+    across all statuses, not just open)."""
+    uid = await _make_user(db)
+    broker = PaperBroker()
+    broker.set_price("AAPL", 100.0)
+    engine = _engine(db, broker, dedup_window_seconds=0)
+
+    await engine.handle_buy(BuySignalEvent(ticker="AAPL", user_id=uid, source="t"))
+    await engine.handle_sell(SellSignalEvent(ticker="AAPL", user_id=uid, source="t"))
+    async with db.session() as s:
+        assert await PositionRepository(s).list_open(uid) == []
+
+    await engine.handle_buy(BuySignalEvent(ticker="AAPL", user_id=uid, source="t"))
+
+    async with db.session() as s:
+        positions = await PositionRepository(s).list_open(uid)
+        orders = await OrderRepository(s).list_by_user(uid)
+    assert len(positions) == 1 and positions[0].status == PositionStatus.open.value
+    assert len([o for o in orders if o.side == "buy"]) == 2
+
+
+async def test_same_ticker_can_be_open_in_two_asset_classes(db: Database) -> None:
+    """Regression test for bugs.md finding 5: position identity must include
+    asset_class, not just (user_id, ticker)."""
+    uid = await _make_user(db)
+    broker = PaperBroker()
+    broker.set_price("BTCUSD", 100.0)
+    engine = _engine(db, broker, dedup_window_seconds=0)
+
+    await engine.handle_buy(
+        BuySignalEvent(ticker="BTCUSD", user_id=uid, source="t", asset_class="crypto")
+    )
+    await engine.handle_buy(
+        BuySignalEvent(ticker="BTCUSD", user_id=uid, source="t", asset_class="fx")
+    )
+
+    async with db.session() as s:
+        positions = await PositionRepository(s).list_open(uid)
+    assert {p.asset_class for p in positions} == {"crypto", "fx"}
+    assert len(positions) == 2
+
+
+
 async def test_manual_and_strategy_orders_share_the_same_ticker_lock(db: Database) -> None:
     uid = await _make_user(db)
     broker = PaperBroker()
@@ -322,4 +421,136 @@ async def test_sell_with_profit_tier_marks_position_tier_taken(db: Database) -> 
         positions = await PositionRepository(s).list_open(uid)
     assert positions[0].profit_tier1_taken is True
     assert positions[0].profit_tier2_taken is True
+
+
+async def test_concurrent_identical_tier_events_only_sell_once(db: Database) -> None:
+    """Regression test for bugs.md finding 7: two overlapping strategy evaluations
+    (e.g. the scheduler and an activation-triggered background run) can both decide
+    to fire the same profit tier before either commits. The second must be rejected
+    once it sees the tier already marked, not sell the configured percentage twice."""
+    uid = await _make_user(db)
+    broker = PaperBroker()
+    broker.set_price("AAPL", 100.0)
+    engine = _engine(db, broker)
+
+    await engine.handle_buy(BuySignalEvent(ticker="AAPL", user_id=uid, source="t"))
+    event = SellSignalEvent(
+        ticker="AAPL", user_id=uid, source="trailing_stop", quantity_pct=33.0, profit_tier=1
+    )
+    await asyncio.gather(engine.handle_sell(event), engine.handle_sell(event))
+
+    async with db.session() as s:
+        positions = await PositionRepository(s).list_open(uid)
+        orders = await OrderRepository(s).list_by_user(uid)
+    sell_orders = [o for o in orders if o.side == "sell"]
+    assert len(sell_orders) == 1
+    assert positions[0].quantity == pytest.approx(10.0 - (10.0 * 0.33))
+    assert positions[0].profit_tier1_taken is True
+
+
+async def test_pending_buy_does_not_open_position(db: Database) -> None:
+    """Regression test for bugs.md finding 2: a broker order reported as anything
+    other than 'filled' must never open/mutate a position — it must be persisted as
+    pending until reconciled."""
+    uid = await _make_user(db)
+    broker = _PendingThenSettleBroker()
+    bus = EventBus()
+    fills: list[OrderFilledEvent] = []
+    bus.subscribe(OrderFilledEvent, lambda e: fills.append(e))
+    engine = _engine(db, broker, bus=bus)
+
+    await engine.handle_buy(BuySignalEvent(ticker="AAPL", user_id=uid, source="t"))
+
+    async with db.session() as s:
+        positions = await PositionRepository(s).list_open(uid)
+        orders = await OrderRepository(s).list_by_user(uid)
+    assert positions == []
+    assert len(orders) == 1
+    assert orders[0].status == OrderStatus.pending.value
+    assert fills == []
+
+
+async def test_pending_sell_does_not_reduce_position(db: Database) -> None:
+    uid = await _make_user(db)
+    broker = _PendingThenSettleBroker()
+    engine = _engine(db, broker)
+
+    async with db.transaction() as s:
+        await PositionRepository(s).create(
+            user_id=uid,
+            ticker="AAPL",
+            asset_class="equity",
+            quantity=10.0,
+            avg_price=100.0,
+            status=PositionStatus.open.value,
+            opened_at=None,
+        )
+
+    await engine.handle_sell(SellSignalEvent(ticker="AAPL", user_id=uid, source="t"))
+
+    async with db.session() as s:
+        positions = await PositionRepository(s).list_open(uid)
+        orders = await OrderRepository(s).list_by_user(uid)
+    assert len(positions) == 1 and positions[0].quantity == 10.0
+    assert orders[0].status == OrderStatus.pending.value
+
+
+async def test_reconcile_applies_fill_after_pending_buy(db: Database) -> None:
+    uid = await _make_user(db)
+    broker = _PendingThenSettleBroker()
+    bus = EventBus()
+    fills: list[OrderFilledEvent] = []
+    bus.subscribe(OrderFilledEvent, lambda e: fills.append(e))
+    engine = _engine(db, broker, bus=bus)
+
+    await engine.handle_buy(BuySignalEvent(ticker="AAPL", user_id=uid, source="t"))
+    async with db.session() as s:
+        order = (await OrderRepository(s).list_by_user(uid))[0]
+    broker.settle(order.broker_order_id, "filled", avg_price=105.0)
+
+    await engine.reconcile_pending_orders()
+
+    async with db.session() as s:
+        positions = await PositionRepository(s).list_open(uid)
+        orders = await OrderRepository(s).list_by_user(uid)
+    assert len(positions) == 1
+    assert positions[0].quantity == 10.0  # 1000 usd / 100 quote price used for sizing
+    assert positions[0].avg_price == 105.0
+    assert orders[0].status == OrderStatus.filled.value
+    assert len(fills) == 1 and fills[0].price == 105.0
+
+
+async def test_reconcile_marks_rejected_with_no_position_change(db: Database) -> None:
+    uid = await _make_user(db)
+    broker = _PendingThenSettleBroker()
+    engine = _engine(db, broker)
+
+    await engine.handle_buy(BuySignalEvent(ticker="AAPL", user_id=uid, source="t"))
+    async with db.session() as s:
+        order = (await OrderRepository(s).list_by_user(uid))[0]
+    broker.settle(order.broker_order_id, "rejected")
+
+    await engine.reconcile_pending_orders()
+
+    async with db.session() as s:
+        positions = await PositionRepository(s).list_open(uid)
+        orders = await OrderRepository(s).list_by_user(uid)
+    assert positions == []
+    assert orders[0].status == OrderStatus.rejected.value
+
+
+async def test_reconcile_leaves_still_pending_order_untouched(db: Database) -> None:
+    uid = await _make_user(db)
+    broker = _PendingThenSettleBroker()
+    engine = _engine(db, broker)
+
+    await engine.handle_buy(BuySignalEvent(ticker="AAPL", user_id=uid, source="t"))
+    await engine.reconcile_pending_orders()
+
+    async with db.session() as s:
+        positions = await PositionRepository(s).list_open(uid)
+        orders = await OrderRepository(s).list_by_user(uid)
+    assert positions == []
+    assert orders[0].status == OrderStatus.pending.value
+
 

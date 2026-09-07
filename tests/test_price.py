@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.modules.db.repositories.price import PriceWatchlistRepository
+from src.modules.db.repositories.price import PriceWatchlistRepository, WatchlistAssetClassConflictError
 from src.modules.price import indicators, regime, storage
 from src.modules.price.pipeline import PricePipeline
 from src.scripts.migrate_legacy_prices import migrate
@@ -71,6 +72,42 @@ def test_storage_list_tickers(tmp_path) -> None:
     assert storage.list_tickers(tmp_path, "15m") == []  # different interval, no files
 
 
+def test_latest_price_prefers_newer_intraday_over_stale_daily(tmp_path) -> None:
+    """Regression test for bugs.md finding 3: a stop/tier check or execution quote
+    must use the freshest stored bar across intervals, not always the daily one."""
+    idx_daily = pd.date_range("2023-01-01", periods=3, freq="D")
+    daily = pd.DataFrame(
+        {
+            "open": [100.0, 100.0, 100.0],
+            "high": [100.0, 100.0, 100.0],
+            "low": [100.0, 100.0, 100.0],
+            "close": [100.0, 100.0, 100.0],
+            "volume": [1000.0, 1000.0, 1000.0],
+        },
+        index=idx_daily,
+    )
+    storage.write_bars(tmp_path, "AAPL", "1d", daily)
+    assert storage.latest_price(tmp_path, "AAPL") == 100.0
+
+    idx_hourly = pd.date_range(idx_daily[-1] + pd.Timedelta(hours=1), periods=2, freq="h")
+    hourly = pd.DataFrame(
+        {
+            "open": [80.0, 75.0],
+            "high": [80.0, 75.0],
+            "low": [80.0, 75.0],
+            "close": [80.0, 75.0],
+            "volume": [500.0, 500.0],
+        },
+        index=idx_hourly,
+    )
+    storage.write_bars(tmp_path, "AAPL", "1h", hourly)
+    assert storage.latest_price(tmp_path, "AAPL") == 75.0
+
+
+def test_latest_price_missing_ticker_returns_none(tmp_path) -> None:
+    assert storage.latest_price(tmp_path, "NOPE") is None
+
+
 async def test_price_watchlist_repository_crud(session: AsyncSession) -> None:
     repo = PriceWatchlistRepository(session)
 
@@ -83,15 +120,22 @@ async def test_price_watchlist_repository_crud(session: AsyncSession) -> None:
     assert row.region == "us"  # default
     assert [r.ticker for r in await repo.list_enabled()] == ["AMZN"]
 
-    # upsert again updates the existing row rather than creating a duplicate
+    # upsert again with the SAME asset_class updates the existing row (fields other
+    # than asset_class) rather than creating a duplicate.
     updated = await repo.upsert(
-        "amzn", asset_class="crypto", enabled=False, poll_interval="1m", region="eu"
+        "amzn", asset_class="equity", enabled=False, poll_interval="1m", region="eu"
     )
     assert updated.id == row.id
-    assert updated.asset_class == "crypto"
+    assert updated.asset_class == "equity"
     assert updated.poll_interval == "1m"
     assert updated.region == "eu"
     assert await repo.list_enabled() == []
+
+    # A conflicting asset_class is rejected, not silently applied (bugs.md finding 18).
+    with pytest.raises(WatchlistAssetClassConflictError):
+        await repo.upsert("amzn", asset_class="crypto")
+    unchanged = await repo.get_by_ticker("AMZN")
+    assert unchanged is not None and unchanged.asset_class == "equity"
 
     toggled = await repo.set_enabled("AMZN", True)
     assert toggled is not None

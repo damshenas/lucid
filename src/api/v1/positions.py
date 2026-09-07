@@ -46,7 +46,7 @@ async def sync_positions_from_broker(
     seen: set[str] = set()
     for bp in broker_positions:
         seen.add(bp.ticker)
-        existing = await repo.get_open_by_ticker(user_id, bp.ticker)
+        existing = await repo.get_open_by_ticker(user_id, bp.ticker, asset_class)
         if existing is None:
             await repo.create(
                 user_id=user_id,

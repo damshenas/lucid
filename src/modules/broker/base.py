@@ -66,3 +66,11 @@ class Broker(ABC):
     @abstractmethod
     async def cancel_order(self, broker_order_id: str) -> bool:
         ...
+
+    @abstractmethod
+    async def get_order_status(self, broker_order_id: str) -> OrderResult:
+        """Look up the current state of a previously placed order — used to
+        reconcile an order that was placed as ``pending`` (or any non-``rejected``/
+        ``filled`` status) so a not-yet-confirmed fill never gets recorded as filled
+        against local position state (see ExecutionEngine.reconcile_pending_orders)."""
+        ...

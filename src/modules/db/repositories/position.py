@@ -12,10 +12,11 @@ from .base import BaseRepository
 class PositionRepository(BaseRepository[Position]):
     model = Position
 
-    async def get_open_by_ticker(self, user_id: int, ticker: str) -> Position | None:
+    async def get_open_by_ticker(self, user_id: int, ticker: str, asset_class: str) -> Position | None:
         stmt = select(Position).where(
             Position.user_id == user_id,
             Position.ticker == ticker,
+            Position.asset_class == asset_class,
             Position.status == PositionStatus.open.value,
         )
         result = await self.session.execute(stmt)
@@ -45,6 +46,17 @@ class PositionRepository(BaseRepository[Position]):
         if tier not in (1, 2):
             raise ValueError(f"invalid profit tier {tier!r}; must be 1 or 2")
         return await self.update(position, **{f"profit_tier{tier}_taken": True})
+
+    async def bump_high_water_mark(self, position: Position, price: float) -> Position:
+        """Raise ``high_water_mark`` to ``price`` if it's a new peak; a no-op
+        (including no DB write) otherwise — this is what makes
+        strategies/sell/trailing_stop.py's stop actually trail behind the highest
+        price seen since entry instead of only ever protecting the original entry
+        (bugs.md finding 4). Never decreases."""
+        current = position.high_water_mark
+        if current is not None and price <= current:
+            return position
+        return await self.update(position, high_water_mark=price)
 
     async def delete_all_for_user(self, user_id: int) -> int:
         """Hard-delete every position (open or closed) for a user — used by the admin
