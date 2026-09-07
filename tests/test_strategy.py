@@ -4,10 +4,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.modules.configs import ConfigService, load_default_config
-from src.modules.strategy import StrategyRegistryService, discover_strategies, seed_missing_strategies
+from src.modules.strategy import (
+    DuplicateStrategyNameError,
+    StrategyRegistryService,
+    discover_strategies,
+    seed_missing_strategies,
+)
 
 
 def test_discover_builtins() -> None:
@@ -104,6 +110,53 @@ async def test_scan_removes_stale_entry_after_rename(tmp_path: Path, session: As
     names = {r.name for r in rows2}
     assert names == {"new_name"}
     assert "old_name" not in {r.name for r in await registry.list()}
+
+
+def test_discover_raises_on_duplicate_name_same_direction(tmp_path: Path) -> None:
+    """Regression test for bugs.md finding 21: two files in the same direction
+    declaring the same STRATEGY_NAME must fail loudly, not silently let one shadow
+    the other."""
+    (tmp_path / "buy").mkdir()
+    body = "STRATEGY_NAME='dup'\nSTRATEGY_VERSION='1'\nCONFIG_SCHEMA={}\nasync def run(context): return None\n"
+    (tmp_path / "buy" / "a.py").write_text(body)
+    (tmp_path / "buy" / "b.py").write_text(body)
+
+    with pytest.raises(DuplicateStrategyNameError) as excinfo:
+        discover_strategies(tmp_path)
+    assert excinfo.value.name == "dup"
+    assert len(excinfo.value.paths) == 2
+
+
+def test_discover_raises_on_duplicate_name_opposite_directions(tmp_path: Path) -> None:
+    """A same-name collision across buy/sell must also be caught — sell files are
+    discovered after buy files, so this previously let a sell strategy silently
+    replace an already-registered buy strategy of the same name."""
+    (tmp_path / "buy").mkdir()
+    (tmp_path / "sell").mkdir()
+    body = "STRATEGY_NAME='dup'\nSTRATEGY_VERSION='1'\nCONFIG_SCHEMA={}\nasync def run(context): return None\n"
+    (tmp_path / "buy" / "a.py").write_text(body)
+    (tmp_path / "sell" / "b.py").write_text(body)
+
+    with pytest.raises(DuplicateStrategyNameError) as excinfo:
+        discover_strategies(tmp_path)
+    assert excinfo.value.name == "dup"
+    assert len(excinfo.value.paths) == 2
+
+
+async def test_scan_fails_on_duplicate_name_instead_of_partial_reconcile(
+    tmp_path: Path, session: AsyncSession
+) -> None:
+    """scan() must propagate the collision rather than silently upserting only one
+    of the two conflicting strategies (bugs.md finding 21)."""
+    (tmp_path / "buy").mkdir()
+    body = "STRATEGY_NAME='dup'\nSTRATEGY_VERSION='1'\nCONFIG_SCHEMA={}\nasync def run(context): return None\n"
+    (tmp_path / "buy" / "a.py").write_text(body)
+    (tmp_path / "buy" / "b.py").write_text(body)
+
+    registry = StrategyRegistryService(session, str(tmp_path))
+    with pytest.raises(DuplicateStrategyNameError):
+        await registry.scan()
+    assert await registry.list() == []
 
 
 async def test_active_strategy_resolution(session: AsyncSession) -> None:

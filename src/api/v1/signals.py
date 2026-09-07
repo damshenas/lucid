@@ -10,8 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.modules.db.models.user import User
 from src.modules.db.repositories.signal import SignalRepository
-from src.modules.encryption import CredentialNotConfiguredError
-from src.modules.signal.sources import SOURCE_NAMES, SignalSourceRegistry, source_requires_credentials
+from src.modules.signal.sources import SOURCE_NAMES, SignalSourceRegistry
 
 from ..deps import get_context, get_current_user, get_session
 
@@ -58,22 +57,11 @@ async def list_signal_sources(
     now for this user — i.e. by a strategy declaring ``EXTERNAL_SOURCES`` or by
     ``POST /sources/check`` below. A source that needs no credentials at all (every
     one currently wired — finviz/tradingview hit fixed public endpoints) is always
-    "configured"; one that does (``source_requires_credentials``) needs at least a
-    base_url credential to resolve (system default or the user's own, per the
-    credential cascade — src/modules/encryption/credentials.py)."""
-    creds = get_context(request).credential_manager(session)
-    out: list[dict[str, Any]] = []
-    for name in SOURCE_NAMES:
-        if not source_requires_credentials(name):
-            configured = True
-        else:
-            try:
-                await creds.get_for_user(f"{name}_base_url", user.id)
-                configured = True
-            except CredentialNotConfiguredError:
-                configured = False
-        out.append({"source": name, "configured": configured})
-    return out
+    "configured"; one that does is checked via ``SignalSourceRegistry.is_configured``,
+    which resolves whichever credential(s) that specific source actually declares
+    (some need only an API key, e.g. finnhub/fmp — not a base_url)."""
+    registry = SignalSourceRegistry(get_context(request).credential_manager(session), user_id=user.id)
+    return [{"source": name, "configured": await registry.is_configured(name)} for name in SOURCE_NAMES]
 
 
 @router.post("/sources/check")

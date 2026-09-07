@@ -201,6 +201,27 @@ async def test_buy_records_acted_signal(db: Database) -> None:
     assert signals[0].acted_at is not None
 
 
+async def test_orders_are_linked_to_their_originating_signal(db: Database) -> None:
+    """Regression test for bugs.md finding 15: every order (buy, sell, and manual)
+    must record the signal that caused it."""
+    uid = await _make_user(db)
+    broker = PaperBroker()
+    broker.set_price("AAPL", 100.0)
+    engine = _engine(db, broker)
+
+    await engine.handle_buy(BuySignalEvent(ticker="AAPL", user_id=uid, source="t"))
+    await engine.handle_sell(SellSignalEvent(ticker="AAPL", user_id=uid, source="t"))
+    await engine.place_manual_order(user_id=uid, ticker="AAPL", side="buy", quantity=1.0)
+
+    async with db.session() as s:
+        orders = await OrderRepository(s).list_by_user(uid)
+        signals = await SignalRepository(s).list_by_user(uid)
+    assert len(orders) == 3
+    assert all(o.signal_id is not None for o in orders)
+    signal_ids = {s.id for s in signals}
+    assert all(o.signal_id in signal_ids for o in orders)
+
+
 async def test_buy_blocked_signal_when_position_already_open(db: Database) -> None:
     uid = await _make_user(db)
     broker = PaperBroker()

@@ -49,7 +49,9 @@ def is_open(region: str, now: datetime | None = None) -> bool:
     local = moment.astimezone(ZoneInfo(hours.timezone))
     if local.weekday() >= 5:  # Saturday=5, Sunday=6
         return False
-    return hours.open_time <= local.time() <= hours.close_time
+    # Close boundary is exclusive — at the exact close instant the session has
+    # already ended, not "still open for one more instant" (bugs.md finding 16).
+    return hours.open_time <= local.time() < hours.close_time
 
 
 __all__ = ["EM", "EU", "REGIONS", "REGION_HOURS", "US", "RegionHours", "is_open"]

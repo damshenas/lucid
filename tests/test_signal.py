@@ -228,6 +228,31 @@ async def test_registry_discover_swallows_connector_failure(
     assert await SignalSourceRegistry(mgr, user_id=None).discover([_FAKE_SOURCE_NAME]) == []
 
 
+async def test_registry_discover_dedupes_same_ticker_from_one_source(
+    session: AsyncSession, monkeypatch
+) -> None:
+    """Regression test for bugs.md finding 14: one provider reporting the same
+    normalized ticker twice (e.g. two exchange listings) must count as a single
+    opinion, not two — first occurrence wins."""
+
+    class _DuplicateTickerConnector(_FakeConnector):
+        async def fetch_ranks(self) -> list[dict]:
+            return [{"rank": 1, "ticker": "AAPL"}, {"rank": 5, "ticker": "AAPL"}]
+
+    monkeypatch.setitem(
+        sources_module._SOURCES,
+        _FAKE_SOURCE_NAME,
+        _Source(_DuplicateTickerConnector, "fetch_rank", _fake_rating, "fetch_ranks", requires_credentials=True),
+    )
+    mgr = CredentialManager(session, _encryptor())
+    await mgr.set_for_user(f"{_FAKE_SOURCE_NAME}_base_url", "https://acme.test", user_id=None)
+
+    results = await SignalSourceRegistry(mgr, user_id=None).discover([_FAKE_SOURCE_NAME])
+
+    assert len(results) == 1
+    assert results[0].rating == "strong_buy"  # the first (rank=1) row, not the second
+
+
 def test_direction_from_rating_parses_text_and_numeric() -> None:
     assert rating_from_text("Strong Buy") == "strong_buy"
     assert rating_from_text("strong sell") == "strong_sell"

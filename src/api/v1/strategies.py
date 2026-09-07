@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.modules.authorization import Permission
 from src.modules.db.models.user import User
 from src.modules.db.repositories.decision import StrategyDecisionRepository
+from src.modules.strategy.loader import DuplicateStrategyNameError
 
 from ..deps import get_context, get_current_user, get_session, require_permission
 
@@ -46,7 +47,10 @@ async def scan_strategies(
     user: User = Depends(get_current_user),
 ) -> dict[str, int]:
     service = get_context(request).strategy_service(session)
-    rows = await service.scan()
+    try:
+        rows = await service.scan()
+    except DuplicateStrategyNameError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     await session.commit()
     return {"scanned": len(rows)}
 
@@ -62,8 +66,14 @@ async def activate_strategy(
 ) -> dict[str, str]:
     ctx = get_context(request)
     service = ctx.strategy_service(session)
-    if service.get_loaded(name) is None:
+    loaded = service.get_loaded(name)
+    if loaded is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"strategy '{name}' not found")
+    if loaded.direction != direction:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"strategy '{name}' is a {loaded.direction} strategy, cannot activate it for {direction}",
+        )
     await ctx.config_service(session).set_value(
         f"strategy.active_{direction}_strategy", name, role=user.role, user_id=user.id
     )

@@ -53,8 +53,15 @@ async def run(context: StrategyContext) -> StrategyDecision:
     # error is None -> the source was configured and actually answered (even if its
     # own opinion is "hold"/unparseable, i.e. direction is None); treat "not
     # configured"/"request failed" the same way (out of the vote entirely), never as
-    # a "no" vote.
-    answered = [s for s in context.external_signals if s.error is None]
+    # a "no" vote. Deduped by source name (first occurrence wins) so two rows from
+    # the same provider (e.g. two exchange listings normalizing to this ticker) can
+    # never count as two independent votes — "2 providers agree" must mean two
+    # distinct providers, not two rows (bugs.md finding 14).
+    seen_sources: dict[str, object] = {}
+    for sig in context.external_signals:
+        if sig.error is None:
+            seen_sources.setdefault(sig.source, sig)
+    answered = list(seen_sources.values())
     if not answered:
         return StrategyDecision(
             acted=False,

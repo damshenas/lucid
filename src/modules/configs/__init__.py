@@ -114,6 +114,18 @@ def _unwrap_optional(annotation: Any) -> Any:
     return annotation
 
 
+def _is_nullable(annotation: Any) -> bool:
+    """Whether ``annotation`` is a ``X | None`` union — distinct from
+    ``FieldInfo.is_required()``, which is False for ANY field with a default
+    (e.g. ``fixed_usd: float = 100.0``), not just a genuinely optional one
+    (e.g. ``active_buy_strategy: str | None = None``). Conflating the two let a
+    non-nullable field silently accept ``None`` (bugs.md finding 12)."""
+    origin = typing.get_origin(annotation)
+    if origin in (typing.Union, types.UnionType):
+        return type(None) in typing.get_args(annotation)
+    return False
+
+
 def _type_name(annotation: Any) -> str:
     annotation = _unwrap_optional(annotation)
     origin = typing.get_origin(annotation)
@@ -165,6 +177,7 @@ def _model_fields(model_cls: type[BaseModel], prefix: str = "") -> dict[str, dic
                 "type": _type_name(info.annotation),
                 "default": _field_default(info),
                 "required": info.is_required(),
+                "nullable": _is_nullable(info.annotation),
             }
             choices = _choices(info.annotation)
             if choices is not None:
@@ -281,6 +294,52 @@ class ConfigService:
         return compiled
 
 
+def validate_settings_values(
+    schema: dict[str, dict[str, dict[str, Any]]], values: dict[str, Any]
+) -> list[str]:
+    """Validate an entire settings-save request against a compiled schema (see
+    ConfigService.compile_schema) BEFORE any key is persisted — rejects unknown
+    keys, ``None`` for a non-nullable field, wrong types, and invalid enum choices
+    (bugs.md finding 12). Returns one message per invalid key; an empty list means
+    the whole request is valid."""
+    known: dict[str, dict[str, Any]] = {}
+    for section, fields in schema.items():
+        for field_key, meta in fields.items():
+            known[f"{section}.{field_key}"] = meta
+
+    errors: list[str] = []
+    for key, value in values.items():
+        meta = known.get(key)
+        if meta is None:
+            errors.append(f"'{key}' is not a known config key")
+            continue
+        if value is None:
+            if not meta.get("nullable", False):
+                errors.append(f"'{key}' cannot be null")
+            continue
+        field_type = meta.get("type")
+        if field_type == "enum":
+            choices = meta.get("choices") or []
+            if value not in choices:
+                errors.append(f"'{key}' must be one of {choices}, got {value!r}")
+        elif field_type == "bool":
+            if not isinstance(value, bool):
+                errors.append(f"'{key}' must be a boolean, got {type(value).__name__}")
+        elif field_type == "int":
+            if isinstance(value, bool) or not isinstance(value, int):
+                errors.append(f"'{key}' must be an integer, got {type(value).__name__}")
+        elif field_type == "float":
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                errors.append(f"'{key}' must be a number, got {type(value).__name__}")
+        elif field_type == "str":
+            if not isinstance(value, str):
+                errors.append(f"'{key}' must be a string, got {type(value).__name__}")
+        elif field_type == "list":
+            if not isinstance(value, list):
+                errors.append(f"'{key}' must be a list, got {type(value).__name__}")
+    return errors
+
+
 __all__ = [
     "ConfigError",
     "ConfigPermissionError",
@@ -292,4 +351,5 @@ __all__ = [
     "load_default_config",
     "module_sections",
     "unflatten",
+    "validate_settings_values",
 ]

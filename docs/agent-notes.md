@@ -523,3 +523,101 @@ with the codebase. Newest entries at the bottom.
     right after a newly-inserted test — always re-read the resulting file after
     inserting a new test between two existing ones, don't trust a "successful"
     edit result alone.
+
+- 2026-09-07 (same day, follow-up pass) — fixed the remaining 11 findings from
+  `docs/bugs.md` (11,12,13,14,15,16,17,19,20,21,22), completing all 22. 196 tests
+  passing. Notable decisions/gotchas:
+  - **must_change_password enforcement (11):** added the check inside
+    `require_permission`'s dependency (deps.py), not plain `get_current_user` —
+    the change-password route itself uses plain `get_current_user` and must stay
+    reachable while the flag is true. This blocks every permissioned action
+    (trade, edit credentials, activate a strategy, admin actions) but leaves
+    read-only GETs open so a user can still navigate to Settings > Security.
+    **Gotcha found along the way:** `POST /api/v1/settings` (save_values) does
+    its own permission check (`can_write_key`) via plain `get_current_user`, NOT
+    `require_permission` — so it needed its own standalone
+    `must_change_password` gate added directly in the route; the
+    `require_permission`-based fix alone did not cover it. Any other route using
+    plain `get_current_user` with custom in-route permission logic (grep for
+    `Depends(get_current_user)` outside `require_permission`) should be checked
+    the same way if this rule is ever revisited.
+  - **Settings validation (12):** new `validate_settings_values()` in
+    `configs/__init__.py`, checked against the same compiled schema
+    `GET /settings/schema` already produces (so there's one source of truth, not
+    two). Added a `nullable` flag to field metadata, separate from `required` —
+    `required=False` was being used for both "has a default value" (e.g.
+    `fixed_usd: float = 100.0`) and "genuinely `X | None = None`" (e.g.
+    `active_buy_strategy`), so a plain `float` field could previously accept
+    `None` as long as it merely had *a* default. Whole request is validated
+    before any key is written (all-or-nothing).
+  - **Strategy direction validation (13):** both entry points
+    (`PATCH /strategies/{name}/activate` and the generic
+    `strategy.active_{buy,sell}_strategy` settings keys) now resolve the named
+    strategy and reject a direction mismatch or nonexistent name with 400.
+  - **Signal vote dedup (14):** the real fix is in
+    `SignalSourceRegistry._discover_one` (signal/sources.py) — dedupes by ticker
+    *within one source's* raw items (only `discover()`, the bulk endpoint, can
+    ever return >1 row per source per ticker; `fetch()` cannot). Also made
+    `signal_follow.py` defensively count distinct `.source` names rather than
+    raw row count, as a second line of defense.
+  - **Order → signal linkage (15):** added `signal_id=signal.id` to all 6
+    `orders.create()` call sites in `execution/__init__.py` (buy/sell ×
+    filled/pending, plus manual). **Bonus bug found and fixed while doing
+    this:** `handle_sell`'s FILLED-branch `orders.create()` call was missing
+    `asset_class` entirely (a leftover gap from the earlier pending-order fix —
+    the *pending* branch had it, the filled branch didn't). Deliberately did
+    **not** attempt to populate `signal_outcomes` (PnL attribution) — bugs.md's
+    own fix direction says that "requires defining outcome attribution... before
+    populating", i.e. it's an underspecified new feature, not a well-defined bug
+    fix; left as a follow-up.
+  - **Settings/watchlist partial-apply (19):** frontend-only fix (no JS/TS test
+    runner exists in this repo — `npm run build` compiling is the only
+    automated check available; verified by careful code review instead).
+    `useWatchlistDraft.commit()` switched from `Promise.all` (fails fast, but
+    earlier-fired parallel requests may still land) to `Promise.allSettled`,
+    tracks failures per-ticker, and merges the post-commit reload so a
+    **failed** add/update's attempted draft value is preserved instead of being
+    silently wiped by the unconditional reload — a real "add ticker, save
+    fails, ticker just vanishes with no error" bug. `Settings.tsx`'s `save()`
+    now treats the schema-fields save and the watchlist commit as two
+    independent try/catch sections, so a watchlist failure no longer prevents
+    the schema fields (already successfully saved moments earlier) from having
+    their own dirty state cleared.
+  - **Signal-source configured status (20):** new
+    `SignalSourceRegistry.is_configured(name)` reuses the exact same
+    `_build_connector` resolution `fetch()`/`discover()` already use — so status
+    reporting can never disagree with what actually happens at runtime. The old
+    code always checked a hardcoded `<name>_base_url` credential for *any*
+    credentialed source, which is wrong for finnhub/fmp_rating/fmp_grades
+    (API-key-only, `needs_base_url=False`).
+  - **Duplicate strategy names (21):** `discover_strategies()`
+    (strategy/loader.py) now validates name uniqueness across the *complete*
+    result (both `buy/` and `sell/` combined) before returning, raising
+    `DuplicateStrategyNameError` with both conflicting file paths. This makes
+    every caller (`scan()`, `get_loaded()`, `all_extra_sections()`, and thus
+    app startup itself) fail loudly instead of a dict comprehension silently
+    keeping "whichever one came last". Deliberately left app startup
+    (`src/api/main.py`'s lifespan `scan()`) and `TradingRuntime` unwrapped — a
+    collision there is meant to fail loudly per the fix direction's "do not
+    publish a partially reconciled registry", not fall back to a "last known
+    good" registry (that wasn't asked for).
+  - **Backtrader partial sells (22):** `BacktraderLiveBridge`'s `_OrderRecorder`
+    now also records the strategy's position size immediately after each
+    completed order; the sell translation recovers the pre-sell size
+    (`post_size + sell_size`) and computes a real `quantity_pct` from it
+    (`None` only for a genuine full exit) instead of always requesting a full
+    exit. Buy-side quantity was deliberately left untranslated and documented
+    as such: no `BuySignalEvent` in Lucid carries a quantity at all — every
+    buy strategy's suggested size (if any) is discarded and recomputed by
+    `ExecutionEngine.handle_buy` from `execution.quantity_mode` — this isn't a
+    backtrader-specific gap, so fixing it would mean redesigning the
+    `BuySignalEvent`/execution-engine sizing contract for every strategy, well
+    beyond this one bridge.
+  - **Market close boundary (16):** `market_hours.is_open()`'s close comparison
+    changed from `<=` to `<` (exclusive close) — a one-line fix.
+  - **PaperBroker negative cash (17):** `place_market_order`'s buy branch now
+    rejects with `"insufficient cash"` if `quantity * price > self._cash`,
+    before mutating any state — matches how a real funded broker would behave;
+    `broker.paper_mode` in production routes to Trading212's demo account, not
+    this in-memory broker (see the `resolve_broker` false-positive note above),
+    so this only affects tests/an explicit custom in-memory broker config.

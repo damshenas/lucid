@@ -204,6 +204,25 @@ class SignalSourceRegistry:
         names = [n for n in (sources or SOURCE_NAMES) if n in _SOURCES]
         return [await self._fetch_one(name, ticker) for name in names]
 
+    async def is_configured(self, name: str) -> bool:
+        """Whether ``name`` is currently usable. A credential-free source (every one
+        currently wired — finviz/tradingview) is always True. A credentialed source
+        is checked by actually resolving whichever credential(s) it declares via
+        ``needs_base_url``/``credential_prefix`` — a source needing only an API key
+        (finnhub, fmp_rating, fmp_grades) must not be judged by a nonexistent
+        ``<name>_base_url`` credential (bugs.md finding 20); reuses the exact same
+        resolution ``_build_connector`` does for fetch()/discover(), so status
+        reporting can never disagree with what actually happens at runtime."""
+        source = _SOURCES.get(name)
+        if source is None or not source.requires_credentials:
+            return True
+        try:
+            connector = await self._build_connector(name, source)
+        except CredentialNotConfiguredError:
+            return False
+        await connector.aclose()
+        return True
+
     async def discover(self, sources: list[str] | None = None) -> list[ExternalSignal]:
         """Every currently-rated ticker from each requested (default: all configured)
         source, flattened into one list — the discovery counterpart to ``fetch()``,
@@ -245,12 +264,21 @@ class SignalSourceRegistry:
         try:
             raw_items = await getattr(connector, source.discover_method)()
             signals = []
+            seen_tickers: set[str] = set()
             for item in raw_items:
+                ticker = item["ticker"]
+                # A source can report more than one raw item for the same normalized
+                # ticker (e.g. two exchange listings of the same company) — keep only
+                # the first so one provider never counts as more than one vote
+                # (bugs.md finding 14). First-seen wins; not merged/reconciled.
+                if ticker in seen_tickers:
+                    continue
+                seen_tickers.add(ticker)
                 rating = source.to_rating(item)
                 signals.append(
                     ExternalSignal(
                         source=name,
-                        ticker=item["ticker"],
+                        ticker=ticker,
                         direction=direction_from_rating(rating),
                         rating=rating,
                         raw=item,

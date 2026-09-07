@@ -246,6 +246,23 @@ async def test_signal_follow_holds_below_vote_threshold() -> None:
     assert "need 2" in decision.reasoning
 
 
+async def test_signal_follow_duplicate_rows_from_one_source_count_once() -> None:
+    """Regression test for bugs.md finding 14: two rows from the SAME source must
+    not be able to satisfy a 2-vote threshold on their own — votes are counted per
+    distinct source name, not per row."""
+    strat = _LOADED["signal_follow"]
+    ctx = StrategyContext(
+        ticker="NFLX", user_id=1, asset_class="equity",
+        external_signals=[
+            ExternalSignal(source="tradingview", ticker="NFLX", direction="buy"),
+            ExternalSignal(source="tradingview", ticker="NFLX", direction="buy"),
+        ],
+    )
+    decision = await strat.run(ctx)
+    assert not decision.acted
+    assert decision.event is None
+
+
 async def test_signal_follow_holds_when_no_source_configured() -> None:
     strat = _LOADED["signal_follow"]
     ctx = StrategyContext(

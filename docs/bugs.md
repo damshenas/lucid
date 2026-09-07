@@ -2,10 +2,11 @@
 
 Audit date: 2026-09-04
 
-**Update (2026-09-07):** findings 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, and 18 (every
-Critical/High severity item) have been fixed — see `docs/agent-notes.md`'s
-2026-09-07 entry for implementation details and any deviations from the fix
-direction below. Findings 11-17, 19-22 remain open.
+**Update (2026-09-07):** all 22 findings in this document have been fixed — see
+`docs/agent-notes.md`'s 2026-09-07 entries for implementation details and any
+scope deviations (notably findings 15 and 22, which were fixed partially by
+deliberate, documented scope decisions; and finding 18, fixed via the
+document's own second alternative rather than full asset_class identity).
 
 ## Scope
 
@@ -337,6 +338,8 @@ one invariant check for role changes, deactivation, and deletion.
 
 **Severity:** Medium
 
+**Status:** FIXED (2026-09-07) — see docs/agent-notes.md.
+
 **Evidence:**
 
 - New users and password resets set `must_change_password=True` in
@@ -364,6 +367,8 @@ changing the password.
 ### 12. Settings accept unknown, null, and wrong-typed values without validation
 
 **Severity:** Medium
+
+**Status:** FIXED (2026-09-07) — see docs/agent-notes.md.
 
 **Evidence:**
 
@@ -400,6 +405,8 @@ strategy parameter, and one invalid key in a multi-key request.
 
 **Severity:** Medium
 
+**Status:** FIXED (2026-09-07) — see docs/agent-notes.md.
+
 **Evidence:**
 
 - `src/api/v1/strategies.py:63-69` checks that a strategy exists but does not compare
@@ -427,6 +434,8 @@ activation entry points.
 ### 14. Signal-provider voting counts rows, not distinct providers
 
 **Severity:** Medium
+
+**Status:** FIXED (2026-09-07) — see docs/agent-notes.md.
 
 **Evidence:**
 
@@ -456,6 +465,10 @@ source.
 
 **Severity:** Medium business-data gap
 
+**Status:** FIXED (2026-09-07, signal_id linkage only — signal_outcomes
+population/PnL attribution was explicitly left as a follow-up; see
+docs/agent-notes.md).
+
 **Evidence:**
 
 - `src/modules/db/models/order.py:23-26` defines `Order.signal_id`.
@@ -483,6 +496,8 @@ the intended outcome exactly once.
 
 **Severity:** Low
 
+**Status:** FIXED (2026-09-07) — see docs/agent-notes.md.
+
 **Evidence:** `src/modules/schedules/market_hours.py:45` uses:
 
 ```python
@@ -502,6 +517,8 @@ closed. A boundary-timed strategy/fetch can run once after the configured sessio
 ### 17. The in-memory PaperBroker allows negative cash
 
 **Severity:** Low, non-production path
+
+**Status:** FIXED (2026-09-07) — see docs/agent-notes.md.
 
 **Evidence:** `src/modules/broker/paper.py:53-62` subtracts buy cost without checking
 available cash and always returns a fill.
@@ -554,6 +571,8 @@ is overwritten.
 
 **Severity:** Medium
 
+**Status:** FIXED (2026-09-07) — see docs/agent-notes.md.
+
 **Evidence:**
 
 - `src/ui/src/pages/Settings.tsx:91-105` commits schema settings first and then
@@ -585,6 +604,8 @@ successful settings save.
 
 **Severity:** Medium
 
+**Status:** FIXED (2026-09-07) — see docs/agent-notes.md.
+
 **Evidence:**
 
 - `src/api/v1/signals.py:62-80` considers every credentialed source configured only
@@ -614,6 +635,8 @@ is saved, including both FMP aliases sharing one key.
 
 **Severity:** Medium
 
+**Status:** FIXED (2026-09-07) — see docs/agent-notes.md.
+
 **Evidence:**
 
 - `src/modules/strategy/loader.py:150-164` returns every discovered file without
@@ -641,6 +664,9 @@ directions declaring the same name.
 ### 22. Backtrader live bridge converts partial sells into full exits
 
 **Severity:** Medium, currently dormant integration
+
+**Status:** FIXED (2026-09-07, sell side only — buy-side quantity was determined
+to be out of scope; see docs/agent-notes.md).
 
 **Evidence:**
 

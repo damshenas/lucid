@@ -105,3 +105,29 @@ def test_market_hours_eu_and_em_sessions() -> None:
 def test_market_hours_unknown_region_defaults_open() -> None:
     moment = datetime(2026, 7, 18, 3, 0, tzinfo=timezone.utc)  # a Saturday
     assert market_hours.is_open("apac", moment) is True
+
+
+def test_market_hours_close_boundary_is_exclusive() -> None:
+    """Regression test for bugs.md finding 16: the market must report closed at
+    the exact close instant, not "still open for one more instant"."""
+    # US close 16:00 America/New_York == 20:00 UTC on 2026-07-15 (EDT, UTC-4).
+    us_close = datetime(2026, 7, 15, 20, 0, 0, tzinfo=timezone.utc)
+    assert market_hours.is_open(market_hours.US, us_close) is False
+    assert market_hours.is_open(market_hours.US, us_close.replace(second=1)) is False
+    just_before = datetime(2026, 7, 15, 19, 59, 59, tzinfo=timezone.utc)
+    assert market_hours.is_open(market_hours.US, just_before) is True
+
+    # EU close 16:30 Europe/London == 15:30 UTC on 2026-07-15 (BST, UTC+1).
+    eu_close = datetime(2026, 7, 15, 15, 30, 0, tzinfo=timezone.utc)
+    assert market_hours.is_open(market_hours.EU, eu_close) is False
+
+    # EM close 15:00 Asia/Shanghai == 07:00 UTC (UTC+8, no DST).
+    em_close = datetime(2026, 7, 15, 7, 0, 0, tzinfo=timezone.utc)
+    assert market_hours.is_open(market_hours.EM, em_close) is False
+
+
+def test_market_hours_open_boundary_is_inclusive() -> None:
+    # US open 09:30 America/New_York == 13:30 UTC on 2026-07-15 (EDT, UTC-4) — the
+    # session has just started, not "not open yet".
+    us_open = datetime(2026, 7, 15, 13, 30, 0, tzinfo=timezone.utc)
+    assert market_hours.is_open(market_hours.US, us_open) is True

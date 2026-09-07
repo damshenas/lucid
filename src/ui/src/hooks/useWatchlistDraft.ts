@@ -135,19 +135,52 @@ export function useWatchlistDraft(): WatchlistDraft {
       return s !== undefined && (s.poll_interval !== d.poll_interval || s.region !== d.region);
     });
 
-    try {
-      await Promise.all([
-        ...toAdd.map((d) => api.addToWatchlist(d.ticker, d.asset_class, d.poll_interval, d.region)),
-        ...toRemove.map((s) => api.removeFromWatchlist(s.ticker)),
-        ...toUpdate.map((d) =>
+    // Each op is tracked with the ticker it belongs to and run independently
+    // (allSettled, not all) — one failing must not hide whether the others
+    // actually landed, and the caller needs to know exactly which ticker(s)
+    // failed so their attempted change can be preserved rather than silently
+    // discarded by the reload below (bugs.md finding 19).
+    const ops: { ticker: string; run: () => Promise<unknown> }[] = [
+      ...toAdd.map((d) => ({
+        ticker: d.ticker,
+        run: () => api.addToWatchlist(d.ticker, d.asset_class, d.poll_interval, d.region),
+      })),
+      ...toRemove.map((s) => ({ ticker: s.ticker, run: () => api.removeFromWatchlist(s.ticker) })),
+      ...toUpdate.map((d) => ({
+        ticker: d.ticker,
+        run: () =>
           api.updateWatchlistItem(d.ticker, { poll_interval: d.poll_interval, region: d.region }),
-        ),
-      ]);
-    } finally {
-      // Resync with whatever actually landed, whether commit succeeded outright or
-      // partially failed (Promise.all rejects on the first failure but earlier calls
-      // may already have applied) — never leave the draft/saved baseline stale.
-      await load();
+      })),
+    ];
+
+    const results = await Promise.allSettled(ops.map((op) => op.run()));
+    const failedTickers = new Set<string>();
+    const errors: string[] = [];
+    results.forEach((result, i) => {
+      if (result.status === "rejected") {
+        failedTickers.add(ops[i].ticker);
+        errors.push(`${ops[i].ticker}: ${(result.reason as Error).message}`);
+      }
+    });
+
+    // Resync with whatever actually landed server-side, but keep the user's
+    // still-unsaved edit for any ticker whose operation failed instead of
+    // wiping it out from under them — they'd otherwise have to redo it from
+    // scratch with no indication anything went wrong for that specific ticker.
+    const preserved = draft.filter((d) => failedTickers.has(d.ticker));
+    try {
+      const items = await api.watchlist();
+      const normalized = toDraft(items);
+      setSaved(normalized);
+      const preservedTickers = new Set(preserved.map((p) => p.ticker));
+      const merged = normalized.filter((n) => !preservedTickers.has(n.ticker));
+      setDraft([...merged, ...preserved]);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+
+    if (errors.length > 0) {
+      throw new Error(`some watchlist changes failed to save — ${errors.join("; ")}`);
     }
   }
 

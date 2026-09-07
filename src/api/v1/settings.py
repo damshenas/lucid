@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.modules.authorization import Permission, has_permission
-from src.modules.configs import ConfigError, ConfigPermissionError
+from src.modules.configs import ConfigError, ConfigPermissionError, validate_settings_values
 from src.modules.db.models.user import User
 from src.modules.logger import set_level
 
@@ -64,12 +64,49 @@ async def save_values(
     session: AsyncSession = Depends(get_session),
     user: User = Depends(get_current_user),
 ) -> dict[str, bool]:
+    if user.must_change_password:
+        # This route checks per-key write permission itself (can_write_key) rather
+        # than going through require_permission, so it needs its own
+        # must_change_password gate too (bugs.md finding 11).
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "password change required before this action"
+        )
     config = get_context(request).config_service(session)
+    strategy_service = get_context(request).strategy_service(session)
     # Admins manage "system defaults" (per plan.md's RBAC table) — their writes apply
     # globally (user_id=None) so every trader/viewer picks them up, rather than only
     # affecting the admin's own (trading-disabled) account. A trader's own
     # strategy.* override still lands on their personal user_id.
     target_user_id = None if has_permission(user.role, Permission.edit_system_settings) else user.id
+    # Validate the ENTIRE request against the compiled schema before writing
+    # anything — an unknown key, a null for a non-nullable field, a wrong type, or
+    # an invalid enum choice must reject the whole save, not just the offending key
+    # partway through (bugs.md finding 12).
+    extra = strategy_service.all_extra_sections()
+    schema = await config.compile_schema(
+        user_id=target_user_id, asset_class=body.asset_class, extra_sections=extra
+    )
+    errors = validate_settings_values(schema, body.values)
+    if errors:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "; ".join(errors))
+    # A strategy name saved as strategy.active_{buy,sell}_strategy must actually
+    # exist and be declared for that direction — otherwise it silently becomes an
+    # inert/misdirected "active" strategy with no error anywhere (bugs.md finding 13).
+    for direction in ("buy", "sell"):
+        strategy_name = body.values.get(f"strategy.active_{direction}_strategy")
+        if strategy_name is None:
+            continue
+        loaded = strategy_service.get_loaded(strategy_name)
+        if loaded is None:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, f"strategy '{strategy_name}' not found"
+            )
+        if loaded.direction != direction:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"strategy '{strategy_name}' is a {loaded.direction} strategy, "
+                f"cannot set it as the active {direction} strategy",
+            )
     try:
         for key, value in body.values.items():
             await config.set_value(

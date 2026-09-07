@@ -92,27 +92,40 @@ export function Settings() {
 
   async function save() {
     setSaving(true);
-    try {
-      if (Object.keys(edited).length > 0) {
+    const errors: string[] = [];
+    // Each section is saved and its own dirty state cleared independently — a
+    // failure in one (e.g. the watchlist) must not hide that the other (schema
+    // fields) already succeeded, nor leave a successfully-saved section still
+    // marked dirty (bugs.md finding 19).
+    if (Object.keys(edited).length > 0) {
+      try {
         await api.saveSettings(edited);
+        // Refetch (and apply it) *before* clearing `edited` — otherwise there's a
+        // render in between with `edited` already cleared but `schema` still the
+        // stale snapshot fetched at mount, which briefly (or, if the refetch is
+        // slow/fails, not-so-briefly) shows saved fields reverted to their
+        // pre-save values. Clearing `edited` only after fresh values have
+        // replaced `schema` ensures the toggle/field never displays anything
+        // other than what's actually persisted.
+        await refreshSchema();
+        setEdited({});
+      } catch (e) {
+        errors.push((e as Error).message);
       }
-      if (watchlistDraft.dirty) {
-        await watchlistDraft.commit();
-      }
-      // Refetch (and apply it) *before* clearing `edited` — otherwise there's a
-      // render in between with `edited` already cleared but `schema` still the stale
-      // snapshot fetched at mount, which briefly (or, if the refetch is slow/fails,
-      // not-so-briefly) shows saved fields reverted to their pre-save values. Clearing
-      // `edited` only after fresh values have replaced `schema` ensures the toggle/
-      // field never displays anything other than what's actually persisted.
-      await refreshSchema();
-      setEdited({});
-      setStatus({ text: "Saved.", tone: "success" });
-    } catch (e) {
-      setStatus({ text: (e as Error).message, tone: "error" });
-    } finally {
-      setSaving(false);
     }
+    if (watchlistDraft.dirty) {
+      try {
+        await watchlistDraft.commit();
+      } catch (e) {
+        errors.push((e as Error).message);
+      }
+    }
+    if (errors.length > 0) {
+      setStatus({ text: errors.join(" "), tone: "error" });
+    } else {
+      setStatus({ text: "Saved.", tone: "success" });
+    }
+    setSaving(false);
   }
 
   function schemaTab(name: string) {

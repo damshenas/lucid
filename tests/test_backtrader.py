@@ -44,6 +44,14 @@ class _BuyThenSell(bt.Strategy):
             self.sell(size=10)
 
 
+class _BuyThenPartialSell(bt.Strategy):
+    def next(self) -> None:
+        if len(self) == 2 and not self.position:
+            self.buy(size=10)
+        elif len(self) == 20 and self.position:
+            self.sell(size=4)  # sell less than the full 10-share position
+
+
 def test_run_backtest_returns_metrics() -> None:
     result = run_backtest(_BuyAndHold, _df(), initial_cash=100_000.0)
     assert result.initial_cash == 100_000.0
@@ -62,3 +70,23 @@ async def test_live_bridge_emits_events() -> None:
 
     assert any(isinstance(e, BuySignalEvent) for e in published)
     assert len(seen) == len(published)
+
+
+async def test_live_bridge_full_exit_sell_has_no_quantity_pct() -> None:
+    bridge = BacktraderLiveBridge(bus=EventBus(), user_id=1)
+    published = await bridge.run_live(_BuyThenSell, _df(), "AAPL")
+
+    sells = [e for e in published if isinstance(e, SellSignalEvent)]
+    assert len(sells) == 1
+    assert sells[0].quantity_pct is None  # sold the entire 10-share position
+
+
+async def test_live_bridge_partial_sell_preserves_quantity_pct() -> None:
+    """Regression test for bugs.md finding 22: a Backtrader strategy's partial
+    sell (4 of 10 shares) must translate to quantity_pct ~= 40%, not a full exit."""
+    bridge = BacktraderLiveBridge(bus=EventBus(), user_id=1)
+    published = await bridge.run_live(_BuyThenPartialSell, _df(), "AAPL")
+
+    sells = [e for e in published if isinstance(e, SellSignalEvent)]
+    assert len(sells) == 1
+    assert sells[0].quantity_pct == pytest.approx(40.0)

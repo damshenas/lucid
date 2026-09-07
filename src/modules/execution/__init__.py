@@ -176,6 +176,7 @@ class ExecutionEngine:
                             status=_normalize_order_status(result.status),
                             broker_order_id=result.broker_order_id,
                             paper=result.paper,
+                            signal_id=signal.id,
                         )
                         await signal_service.mark_acted(signal)
                         return
@@ -203,6 +204,7 @@ class ExecutionEngine:
                         broker_order_id=result.broker_order_id,
                         position_id=position.id,
                         paper=result.paper,
+                        signal_id=signal.id,
                     )
                     await signal_service.mark_acted(signal)
             except Exception as exc:  # noqa: BLE001 - always leave a trace on the signal
@@ -296,6 +298,7 @@ class ExecutionEngine:
                             broker_order_id=result.broker_order_id,
                             position_id=position.id,
                             paper=result.paper,
+                            signal_id=signal.id,
                         )
                         await signal_service.mark_acted(signal)
                         return
@@ -319,6 +322,7 @@ class ExecutionEngine:
                     await orders.create(
                         user_id=event.user_id,
                         ticker=event.ticker,
+                        asset_class=event.asset_class,
                         side=OrderSide.sell.value,
                         quantity=quantity,
                         price=fill_price,
@@ -326,6 +330,7 @@ class ExecutionEngine:
                         broker_order_id=result.broker_order_id,
                         position_id=position.id,
                         paper=result.paper,
+                        signal_id=signal.id,
                     )
                     await signal_service.mark_acted(signal)
             except Exception as exc:  # noqa: BLE001 - always leave a trace on the signal
@@ -421,6 +426,7 @@ class ExecutionEngine:
                             broker_order_id=result.broker_order_id,
                             position_id=position.id if position else None,
                             paper=result.paper,
+                            signal_id=signal.id,
                         )
                         await signal_service.mark_acted(signal)
                         return {
@@ -481,6 +487,7 @@ class ExecutionEngine:
                         broker_order_id=result.broker_order_id,
                         position_id=position.id,
                         paper=result.paper,
+                        signal_id=signal.id,
                     )
                     await signal_service.mark_acted(signal)
             except ManualOrderError:

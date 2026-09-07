@@ -51,7 +51,14 @@ class PaperBroker(Broker):
         existing = self._positions.get(ticker)
 
         if quantity > 0:  # buy
-            self._cash -= quantity * price
+            cost = quantity * price
+            if cost > self._cash:
+                # Fail like a real funded broker would rather than letting cash go
+                # negative — margin isn't modeled here (bugs.md finding 17).
+                return OrderResult(
+                    ticker, quantity, "rejected", paper=True, reason="insufficient cash"
+                )
+            self._cash -= cost
             if existing is None:
                 self._positions[ticker] = BrokerPosition(ticker, quantity, price, price)
             else:

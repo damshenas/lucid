@@ -28,6 +28,20 @@ class StrategyLoadError(Exception):
     pass
 
 
+class DuplicateStrategyNameError(Exception):
+    """Two or more strategy files declare the same STRATEGY_NAME — raised instead of
+    silently letting one shadow the other (whichever a dict comprehension keeps last),
+    which could otherwise replace a buy strategy with a same-named sell strategy
+    (or vice versa) with no error anywhere (bugs.md finding 21)."""
+
+    def __init__(self, name: str, paths: list[str]) -> None:
+        self.name = name
+        self.paths = paths
+        super().__init__(
+            f"duplicate STRATEGY_NAME '{name}' declared by multiple files: {', '.join(paths)}"
+        )
+
+
 @dataclass(slots=True)
 class LoadedStrategy:
     name: str
@@ -136,6 +150,14 @@ def discover_strategies(
             if path.name.startswith("_"):
                 continue
             loaded.append(load_strategy_file(path, direction, builtin_root))
+
+    by_name: dict[str, list[str]] = {}
+    for strategy in loaded:
+        by_name.setdefault(strategy.name, []).append(strategy.file_path)
+    duplicate = next(((name, paths) for name, paths in by_name.items() if len(paths) > 1), None)
+    if duplicate is not None:
+        raise DuplicateStrategyNameError(*duplicate)
+
     return loaded
 
 

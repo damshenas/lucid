@@ -47,6 +47,30 @@ def _auth(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+def _create_and_login_trader(
+    client: TestClient, admin_token: str, username: str, password: str = "traderpass"
+) -> str:
+    """Create a trader (admin-created users default to must_change_password=True),
+    log in, and immediately change the password — otherwise every
+    require_permission-gated call (trade, edit credentials, activate a strategy,
+    ...) 403s until the password is changed (bugs.md finding 11)."""
+    client.post(
+        "/api/v1/admin/users",
+        headers=_auth(admin_token),
+        json={"username": username, "password": password, "role": "trader"},
+    )
+    token = client.post(
+        "/api/v1/auth/login", json={"username": username, "password": password}
+    ).json()["access_token"]
+    changed = client.post(
+        "/api/v1/auth/change-password",
+        headers=_auth(token),
+        json={"new_password": password + "changed1"},
+    )
+    assert changed.status_code == 200
+    return token
+
+
 def test_health_live(client: TestClient) -> None:
     resp = client.get("/health/live")
     assert resp.status_code == 200
@@ -135,14 +159,7 @@ def test_signal_follow_discovers_candidates_without_watchlist_or_price_bars(
     admin_token = client.post(
         "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
     ).json()["access_token"]
-    client.post(
-        "/api/v1/admin/users",
-        headers=_auth(admin_token),
-        json={"username": "trader6", "password": "traderpass", "role": "trader"},
-    )
-    trader_token = client.post(
-        "/api/v1/auth/login", json={"username": "trader6", "password": "traderpass"}
-    ).json()["access_token"]
+    trader_token = _create_and_login_trader(client, admin_token, "trader6")
 
     # Deliberately no watchlist entries at all.
     assert client.get("/api/v1/prices/watchlist", headers=_auth(trader_token)).json() == []
@@ -184,6 +201,35 @@ def test_signal_sources_credential_free_always_configured(client: TestClient) ->
     }
 
 
+def test_signal_sources_reports_configured_for_api_key_only_sources(client: TestClient) -> None:
+    """Regression test for bugs.md finding 20: finnhub/fmp_rating/fmp_grades need
+    only an API key (no base_url) — the status endpoint previously always checked
+    for a nonexistent '<source>_base_url' credential, so it reported them
+    unconfigured even after the correct key was set."""
+    token = client.post(
+        "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
+    ).json()["access_token"]
+
+    client.post(
+        "/api/v1/credentials/system",
+        headers=_auth(token),
+        json={"key": "finnhub_api_key", "value": "FINNHUB_KEY"},
+    )
+    client.post(
+        "/api/v1/credentials/system",
+        headers=_auth(token),
+        json={"key": "fmp_api_key", "value": "FMP_KEY"},
+    )
+
+    resp = client.get("/api/v1/signals/sources", headers=_auth(token))
+    assert resp.status_code == 200
+    sources = {row["source"]: row["configured"] for row in resp.json()}
+    assert sources["finnhub"] is True
+    # Both FMP-backed sources share the one fmp_api_key credential.
+    assert sources["fmp_rating"] is True
+    assert sources["fmp_grades"] is True
+
+
 def test_save_secret_rejected(client: TestClient) -> None:
     token = client.post(
         "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
@@ -194,6 +240,65 @@ def test_save_secret_rejected(client: TestClient) -> None:
         json={"values": {"trading212.api_key": "SECRET"}},
     )
     assert resp.status_code == 400
+
+
+def test_settings_save_rejects_invalid_values(client: TestClient) -> None:
+    """Regression test for bugs.md finding 12: settings previously accepted
+    unknown keys, null for a non-nullable field, wrong types, and invalid enum
+    choices without any validation."""
+    token = client.post(
+        "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
+    ).json()["access_token"]
+
+    unknown = client.post(
+        "/api/v1/settings", headers=_auth(token), json={"values": {"execution.not_a_real_field": 1}}
+    )
+    assert unknown.status_code == 400
+
+    null_value = client.post(
+        "/api/v1/settings", headers=_auth(token), json={"values": {"execution.fixed_usd": None}}
+    )
+    assert null_value.status_code == 400
+
+    wrong_type = client.post(
+        "/api/v1/settings",
+        headers=_auth(token),
+        json={"values": {"execution.fixed_usd": "not-a-number"}},
+    )
+    assert wrong_type.status_code == 400
+
+    bad_enum = client.post(
+        "/api/v1/settings",
+        headers=_auth(token),
+        json={"values": {"execution.quantity_mode": "not_a_real_mode"}},
+    )
+    assert bad_enum.status_code == 400
+
+    # A genuinely optional field (str | None = None) legitimately accepts null.
+    ok_null = client.post(
+        "/api/v1/settings",
+        headers=_auth(token),
+        json={"values": {"strategy.active_buy_strategy": None}},
+    )
+    assert ok_null.status_code == 200
+
+    # A single invalid key in a multi-key request rejects the whole save — the
+    # valid key alongside it must not be partially applied.
+    partial = client.post(
+        "/api/v1/settings",
+        headers=_auth(token),
+        json={"values": {"execution.fixed_usd": 200.0, "execution.bogus": 1}},
+    )
+    assert partial.status_code == 400
+    values = client.get("/api/v1/settings", headers=_auth(token)).json()
+    assert values["execution"]["fixed_usd"] != 200.0
+
+    valid = client.post(
+        "/api/v1/settings",
+        headers=_auth(token),
+        json={"values": {"execution.fixed_usd": 200.0, "execution.quantity_mode": "fixed_usd"}},
+    )
+    assert valid.status_code == 200
 
 
 def test_settings_save_triggers_immediate_run_strategies_on_activation_change(
@@ -243,20 +348,56 @@ def test_activate_strategy_triggers_immediate_run_strategies(
     admin_token = client.post(
         "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
     ).json()["access_token"]
-    client.post(
-        "/api/v1/admin/users",
-        headers=_auth(admin_token),
-        json={"username": "trader7", "password": "traderpass", "role": "trader"},
-    )
-    trader_token = client.post(
-        "/api/v1/auth/login", json={"username": "trader7", "password": "traderpass"}
-    ).json()["access_token"]
+    trader_token = _create_and_login_trader(client, admin_token, "trader7")
 
     resp = client.patch(
         "/api/v1/strategies/trend_follow/activate?direction=buy", headers=_auth(trader_token)
     )
     assert resp.status_code == 200
     assert calls == [None]
+
+
+def test_activate_strategy_wrong_direction_rejected(client: TestClient) -> None:
+    """Regression test for bugs.md finding 13: activating a strategy for the
+    opposite of its declared direction must be rejected, not silently accepted
+    as an inert 'active' strategy with no error."""
+    admin_token = client.post(
+        "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
+    ).json()["access_token"]
+    trader_token = _create_and_login_trader(client, admin_token, "trader13")
+
+    # trailing_stop is a sell-only strategy.
+    wrong = client.patch(
+        "/api/v1/strategies/trailing_stop/activate?direction=buy", headers=_auth(trader_token)
+    )
+    assert wrong.status_code == 400
+
+    right = client.patch(
+        "/api/v1/strategies/trailing_stop/activate?direction=sell", headers=_auth(trader_token)
+    )
+    assert right.status_code == 200
+
+    # Same rule via the generic settings save endpoint.
+    settings_wrong = client.post(
+        "/api/v1/settings",
+        headers=_auth(admin_token),
+        json={"values": {"strategy.active_buy_strategy": "trailing_stop"}},
+    )
+    assert settings_wrong.status_code == 400
+
+    settings_missing = client.post(
+        "/api/v1/settings",
+        headers=_auth(admin_token),
+        json={"values": {"strategy.active_buy_strategy": "no_such_strategy"}},
+    )
+    assert settings_missing.status_code == 400
+
+    settings_right = client.post(
+        "/api/v1/settings",
+        headers=_auth(admin_token),
+        json={"values": {"strategy.active_sell_strategy": "trailing_stop"}},
+    )
+    assert settings_right.status_code == 200
 
 
 def test_settings_write_requires_permission(client: TestClient) -> None:
@@ -434,6 +575,53 @@ def test_admin_cannot_demote_the_last_active_admin(client: TestClient) -> None:
     assert resp.status_code == 200
 
 
+def test_must_change_password_blocks_permissioned_actions_until_changed(
+    client: TestClient,
+) -> None:
+    """Regression test for bugs.md finding 11: must_change_password was purely
+    informational — a newly created trader could place trades, edit credentials,
+    etc. with the temporary password forever. Any require_permission-gated action
+    must now be rejected until the password is actually changed."""
+    admin_token = client.post(
+        "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
+    ).json()["access_token"]
+    client.post(
+        "/api/v1/admin/users",
+        headers=_auth(admin_token),
+        json={"username": "trader12", "password": "traderpass", "role": "trader"},
+    )
+    login = client.post(
+        "/api/v1/auth/login", json={"username": "trader12", "password": "traderpass"}
+    ).json()
+    assert login["must_change_password"] is True
+    token = login["access_token"]
+
+    blocked = client.post(
+        "/api/v1/orders/manual",
+        headers=_auth(token),
+        json={"ticker": "AAPL", "side": "buy", "quantity": 1},
+    )
+    assert blocked.status_code == 403
+
+    # Read-only access is unaffected — the user can still navigate the app to find
+    # the change-password screen.
+    assert client.get("/api/v1/positions", headers=_auth(token)).status_code == 200
+
+    changed = client.post(
+        "/api/v1/auth/change-password",
+        headers=_auth(token),
+        json={"new_password": "brandnewpw1"},
+    )
+    assert changed.status_code == 200
+
+    allowed = client.post(
+        "/api/v1/orders/manual",
+        headers=_auth(token),
+        json={"ticker": "AAPL", "side": "buy", "quantity": 1},
+    )
+    assert allowed.status_code == 201
+
+
 def test_manual_order_trader_only(client: TestClient) -> None:
     admin_token = client.post(
         "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
@@ -441,16 +629,9 @@ def test_manual_order_trader_only(client: TestClient) -> None:
     client.post(
         "/api/v1/admin/users",
         headers=_auth(admin_token),
-        json={"username": "trader1", "password": "traderpass", "role": "trader"},
-    )
-    client.post(
-        "/api/v1/admin/users",
-        headers=_auth(admin_token),
         json={"username": "analyst1", "password": "analystpw", "role": "analyst"},
     )
-    trader_token = client.post(
-        "/api/v1/auth/login", json={"username": "trader1", "password": "traderpass"}
-    ).json()["access_token"]
+    trader_token = _create_and_login_trader(client, admin_token, "trader1")
     analyst_token = client.post(
         "/api/v1/auth/login", json={"username": "analyst1", "password": "analystpw"}
     ).json()["access_token"]
@@ -496,14 +677,7 @@ def test_sync_reflects_broker_positions_after_manual_order(client: TestClient) -
     admin_token = client.post(
         "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
     ).json()["access_token"]
-    client.post(
-        "/api/v1/admin/users",
-        headers=_auth(admin_token),
-        json={"username": "trader1", "password": "traderpass", "role": "trader"},
-    )
-    token = client.post(
-        "/api/v1/auth/login", json={"username": "trader1", "password": "traderpass"}
-    ).json()["access_token"]
+    token = _create_and_login_trader(client, admin_token, "trader1")
 
     # Place a manual order — the mock broker fills it and tracks the position.
     resp = client.post(
@@ -536,14 +710,7 @@ def test_sync_does_not_close_positions_in_other_asset_classes(client: TestClient
     admin_token = client.post(
         "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
     ).json()["access_token"]
-    client.post(
-        "/api/v1/admin/users",
-        headers=_auth(admin_token),
-        json={"username": "trader1", "password": "traderpass", "role": "trader"},
-    )
-    token = client.post(
-        "/api/v1/auth/login", json={"username": "trader1", "password": "traderpass"}
-    ).json()["access_token"]
+    token = _create_and_login_trader(client, admin_token, "trader1")
 
     client.post(
         "/api/v1/orders/manual",
@@ -576,14 +743,7 @@ def test_admin_reset_trading_data_wipes_history_and_resyncs(client: TestClient) 
     admin_token = client.post(
         "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
     ).json()["access_token"]
-    client.post(
-        "/api/v1/admin/users",
-        headers=_auth(admin_token),
-        json={"username": "trader1", "password": "traderpass", "role": "trader"},
-    )
-    trader_token = client.post(
-        "/api/v1/auth/login", json={"username": "trader1", "password": "traderpass"}
-    ).json()["access_token"]
+    trader_token = _create_and_login_trader(client, admin_token, "trader1")
 
     resp = client.post(
         "/api/v1/orders/manual",
@@ -637,14 +797,7 @@ def test_intraday_watchlist_includes_held_position_not_on_watchlist(
     admin_token = client.post(
         "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
     ).json()["access_token"]
-    client.post(
-        "/api/v1/admin/users",
-        headers=_auth(admin_token),
-        json={"username": "trader10", "password": "traderpass", "role": "trader"},
-    )
-    token = client.post(
-        "/api/v1/auth/login", json={"username": "trader10", "password": "traderpass"}
-    ).json()["access_token"]
+    token = _create_and_login_trader(client, admin_token, "trader10")
 
     # AMZN is never added to the watchlist at all.
     assert client.get("/api/v1/prices/watchlist", headers=_auth(token)).json() == []
@@ -670,19 +823,12 @@ def test_admin_reset_trading_data_resyncs_every_asset_class(client: TestClient) 
     admin_token = client.post(
         "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
     ).json()["access_token"]
-    client.post(
-        "/api/v1/admin/users",
-        headers=_auth(admin_token),
-        json={"username": "trader9", "password": "traderpass", "role": "trader"},
-    )
+    token = _create_and_login_trader(client, admin_token, "trader9")
     trader_id = next(
         u["id"]
         for u in client.get("/api/v1/admin/users", headers=_auth(admin_token)).json()
         if u["username"] == "trader9"
     )
-    token = client.post(
-        "/api/v1/auth/login", json={"username": "trader9", "password": "traderpass"}
-    ).json()["access_token"]
 
     client.post(
         "/api/v1/orders/manual",
@@ -822,14 +968,7 @@ def test_own_credentials_trader_only(client: TestClient) -> None:
     admin_token = client.post(
         "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
     ).json()["access_token"]
-    client.post(
-        "/api/v1/admin/users",
-        headers=_auth(admin_token),
-        json={"username": "trader2", "password": "traderpass", "role": "trader"},
-    )
-    trader_token = client.post(
-        "/api/v1/auth/login", json={"username": "trader2", "password": "traderpass"}
-    ).json()["access_token"]
+    trader_token = _create_and_login_trader(client, admin_token, "trader2")
 
     mine = client.get("/api/v1/credentials/mine", headers=_auth(trader_token))
     assert mine.status_code == 200
@@ -864,14 +1003,7 @@ def test_price_watchlist_crud(client: TestClient) -> None:
     admin_token = client.post(
         "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
     ).json()["access_token"]
-    client.post(
-        "/api/v1/admin/users",
-        headers=_auth(admin_token),
-        json={"username": "trader4", "password": "traderpass", "role": "trader"},
-    )
-    trader_token = client.post(
-        "/api/v1/auth/login", json={"username": "trader4", "password": "traderpass"}
-    ).json()["access_token"]
+    trader_token = _create_and_login_trader(client, admin_token, "trader4")
 
     assert client.get("/api/v1/prices/watchlist", headers=_auth(trader_token)).json() == []
 
@@ -962,14 +1094,7 @@ def test_watchlist_add_rejects_asset_class_conflict_instead_of_reclassifying(
     admin_token = client.post(
         "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
     ).json()["access_token"]
-    client.post(
-        "/api/v1/admin/users",
-        headers=_auth(admin_token),
-        json={"username": "trader11", "password": "traderpass", "role": "trader"},
-    )
-    token = client.post(
-        "/api/v1/auth/login", json={"username": "trader11", "password": "traderpass"}
-    ).json()["access_token"]
+    token = _create_and_login_trader(client, admin_token, "trader11")
 
     add = client.post(
         "/api/v1/prices/watchlist",
@@ -1004,14 +1129,7 @@ def test_watchlist_disk_only_tickers_are_not_editable(tmp_path) -> None:
         admin_token = client.post(
             "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
         ).json()["access_token"]
-        client.post(
-            "/api/v1/admin/users",
-            headers=_auth(admin_token),
-            json={"username": "trader5", "password": "traderpass", "role": "trader"},
-        )
-        trader_token = client.post(
-            "/api/v1/auth/login", json={"username": "trader5", "password": "traderpass"}
-        ).json()["access_token"]
+        trader_token = _create_and_login_trader(client, admin_token, "trader5")
 
         # A ticker with bars on disk but no price_watchlist row at all.
         df = pd.DataFrame(

@@ -49,6 +49,14 @@ async def get_current_user(
 
 def require_permission(permission: Permission) -> Callable[..., object]:
     async def dependency(user: User = Depends(get_current_user)) -> User:
+        if user.must_change_password:
+            # A temporary/reset password must be changed before any permissioned
+            # action (trade, edit credentials, activate a strategy, admin actions,
+            # ...) — the change-password endpoint itself depends on plain
+            # get_current_user, not this, so it's unaffected (bugs.md finding 11).
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, "password change required before this action"
+            )
         if not has_permission(user.role, permission):
             raise HTTPException(status.HTTP_403_FORBIDDEN, "insufficient permissions")
         return user

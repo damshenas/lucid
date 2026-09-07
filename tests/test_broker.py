@@ -32,6 +32,21 @@ async def test_paper_broker_sell_without_position_rejected() -> None:
     assert result.status == "rejected"
 
 
+async def test_paper_broker_buy_exceeding_cash_rejected() -> None:
+    """Regression test for bugs.md finding 17: a buy costing more than available
+    cash must be rejected, not silently taken to a negative balance."""
+    broker = PaperBroker(starting_cash=500.0)
+    broker.set_price("AAPL", 100.0)
+
+    result = await broker.place_market_order("AAPL", 10)  # would cost 1000, only 500 available
+    assert result.status == "rejected"
+    assert result.reason == "insufficient cash"
+    assert await broker.get_positions() == []
+
+    summary = await broker.get_account_summary()
+    assert summary.cash == 500.0  # unchanged
+
+
 async def test_registry_paper_mode_returns_paper() -> None:
     registry = BrokerRegistry()
     broker = registry.resolve(broker_name="trading212", asset_class="equity", paper_mode=True)
