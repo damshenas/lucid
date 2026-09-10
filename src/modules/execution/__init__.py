@@ -57,6 +57,16 @@ async def _maybe_await(value: Any) -> Any:
 _ORDER_STATUS_VALUES = {s.value for s in OrderStatus}
 
 
+class _CachedAccountSummaryError:
+    """Negative-cache marker so a failing account-summary call (e.g. broker/edge
+    rate-limit block) isn't retried once per buy signal in the same tick."""
+
+    __slots__ = ("exc",)
+
+    def __init__(self, exc: Exception) -> None:
+        self.exc = exc
+
+
 def _normalize_order_status(status: str) -> str:
     """A broker-reported status that isn't one of Lucid's known ``OrderStatus``
     values fails closed to ``pending`` rather than being trusted as-is, so an
@@ -85,13 +95,24 @@ class ExecutionEngine:
         # buy signals for the same user land in the same scheduler tick and would
         # otherwise each call it back-to-back and get 403'd. 5s matches that limit.
         self._account_summary_cache = TTLCache(default_ttl_seconds=5.0)
+        # Failures get a longer cooldown than successes: once the endpoint is
+        # blocking us, retrying it once per ticker in the same tick just adds more
+        # blocked requests instead of letting it recover.
+        self._account_summary_error_cache = TTLCache(default_ttl_seconds=30.0)
 
     async def _get_account_summary(self, broker: Broker, user_id: int, asset_class: str) -> Any:
         key = (user_id, asset_class)
+        cached_error = self._account_summary_error_cache.get(key)
+        if cached_error is not None:
+            raise cached_error.exc
         cached = self._account_summary_cache.get(key)
         if cached is not None:
             return cached
-        summary = await broker.get_account_summary()
+        try:
+            summary = await broker.get_account_summary()
+        except Exception as exc:  # noqa: BLE001 - cache and re-raise, caller handles it
+            self._account_summary_error_cache.set(key, _CachedAccountSummaryError(exc))
+            raise
         self._account_summary_cache.set(key, summary)
         return summary
 
