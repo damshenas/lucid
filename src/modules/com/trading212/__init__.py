@@ -102,7 +102,11 @@ class Trading212Client:
                     await asyncio.sleep(self._backoff_base * (2 ** (attempt - 1)))
                     continue
             except httpx.HTTPStatusError as exc:
-                raise Trading212Error(f"HTTP {exc.response.status_code} for {path}") from exc
+                body = exc.response.text.strip()[:500]
+                detail = f": {body}" if body else ""
+                raise Trading212Error(
+                    f"HTTP {exc.response.status_code} for {path}{detail}"
+                ) from exc
         raise Trading212Error(f"request failed after {self._retry_attempts} attempts: {last_exc}")
 
     async def _get_instruments(self) -> list[dict[str, Any]]:
