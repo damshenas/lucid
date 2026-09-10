@@ -80,13 +80,41 @@ class TradingRuntime:
 
     async def _watchlist(self) -> list[str]:
         """Tickers the price pipeline keeps fetching: the (buy-screening) watchlist
-        plus every ticker any user currently holds an open position in — so a held
-        position keeps getting fresh bars (and can still be sold) even after it's
-        removed from the watchlist (see run_strategies below)."""
+        plus every ticker any user currently holds an open position in, plus every
+        ticker currently discoverable by any trader's active USES_WATCHLIST=False buy
+        strategy (e.g. signal_follow) — so a held position keeps getting fresh bars
+        (and can still be sold) even after it's removed from the watchlist (see
+        run_strategies below), and a discovery-only candidate (never on the watchlist
+        by design) still gets a stored price. Without the latter, ExecutionEngine.
+        handle_buy's `_quote()` would find nothing and permanently reject every such
+        buy signal with "no price"."""
         async with self.ctx.db.session() as session:
             watchlist_tickers = {r.ticker for r in await PriceWatchlistRepository(session).list_enabled()}
             position_tickers = {r.ticker for r in await PositionRepository(session).list_all_open()}
-        return sorted(watchlist_tickers | position_tickers)
+            users = [
+                u
+                for u in await UserRepository(session).get_all()
+                if u.role == Role.trader.value and u.is_active
+            ]
+            strat_service = self.ctx.strategy_service(session)
+            discovery_sources: dict[int, list[str]] = {}
+            for user in users:
+                try:
+                    values = await self.ctx.config_service(session).compile_values(
+                        user_id=user.id, asset_class="equity"
+                    )
+                except Exception:  # noqa: BLE001 - one bad user's config must not block the fetch
+                    continue
+                buy = strat_service.get_active(values, "buy")
+                if buy is not None and not buy.uses_watchlist:
+                    discovery_sources[user.id] = buy.external_sources
+
+        discovery_tickers: set[str] = set()
+        for user_id, sources in discovery_sources.items():
+            candidates = await self._discover_buy_candidates(user_id, sources)
+            discovery_tickers.update(candidates.keys())
+
+        return sorted(watchlist_tickers | position_tickers | discovery_tickers)
 
     async def _watchlist_by_poll_interval(self, poll_interval: str) -> list[str]:
         """Enabled watchlist tickers set (Settings > Price > Watchlist) to this

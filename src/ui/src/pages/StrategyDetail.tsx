@@ -143,6 +143,7 @@ function StrategySignals({ source }: { source: string }) {
                 <th className="px-4 py-3 font-medium">Direction</th>
                 <th className="px-4 py-3 font-medium">Confidence</th>
                 <th className="px-4 py-3 font-medium">Status</th>
+                <th className="px-4 py-3 font-medium">Reason</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
@@ -163,6 +164,7 @@ function StrategySignals({ source }: { source: string }) {
                   <td className="px-4 py-3">
                     <Badge tone={STATUS_TONE[s.status] ?? "neutral"}>{s.status}</Badge>
                   </td>
+                  <td className="px-4 py-3 text-white/60">{s.reasoning ?? "—"}</td>
                 </tr>
               ))}
             </tbody>

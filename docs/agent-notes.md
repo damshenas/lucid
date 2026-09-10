@@ -621,3 +621,32 @@ with the codebase. Newest entries at the bottom.
     `broker.paper_mode` in production routes to Trading212's demo account, not
     this in-memory broker (see the `resolve_broker` false-positive note above),
     so this only affects tests/an explicit custom in-memory broker config.
+- FIXED (2026-09-10): `signal_follow`-style discovery candidates (`USES_WATCHLIST
+  = False`) never entered the price-fetch pipeline's ticker universe — `_watchlist()`
+  only unioned the watchlist and open positions, so a purely-discovered ticker (by
+  design never on the watchlist) never got a stored daily bar. `ExecutionEngine.
+  handle_buy`'s `_quote()` reads only stored bars, so every resulting buy signal was
+  rejected forever with "no price" — the strategy could discover and vote "buy" on a
+  ticker but could never actually execute a trade for it. This directly contradicted
+  the earlier 2026-08-xx note above ("which happens automatically since watchlist
+  tickers are already in the price-fetch pipeline's ticker set") — that assumption
+  only holds for `uses_watchlist=True` strategies. Fix: `_watchlist()` now also
+  queries every active trader's active buy strategy; if it's `uses_watchlist=False`,
+  its currently-discovered candidate tickers (`_discover_buy_candidates`) are unioned
+  in too, so the regular daily/intraday pipeline fetches a real price for them like
+  any other tracked ticker. Deliberately NOT fetched synchronously inside
+  `run_strategies`/`_evaluate_buy_by_discovery` (would add a live network call to
+  every strategy-evaluation pass, incl. hitting real Yahoo Finance from
+  `test_signal_follow_discovers_candidates_without_watchlist_or_price_bars`, which
+  doesn't mock `yahoofinance.fetch_ohlcv`) — same next-scheduled-fetch lag as
+  watchlist tickers already have, not instant.
+- FIXED (2026-09-10): `SignalService.mark_blocked` appends the execution-level block
+  reason (e.g. "no price", "position already open") into `Signal.reasoning`, with a
+  comment claiming it's "visible in one place (see GET /api/v1/signals,
+  pages/StrategyDetail.tsx)" — but neither actually exposed it: `list_signals`
+  (src/api/v1/signals.py) omitted `reasoning` from its response dict entirely, and
+  the Signals table (pages/StrategyDetail.tsx `StrategySignals`) had no column for
+  it. Net effect: a user could see a signal sitting at status `blocked` (or a
+  decision `acted` followed by no order) with literally no way to see why from the
+  UI. Fixed both: `reasoning` added to the API response, `Signal` TS type, and a new
+  "Reason" column in the Signals table.

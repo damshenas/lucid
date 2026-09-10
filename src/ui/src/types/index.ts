@@ -52,6 +52,7 @@ export interface Signal {
   confidence: number;
   source: string;
   status: string;
+  reasoning: string | null;
 }
 
 export interface Decision {

@@ -40,6 +40,10 @@ async def list_signals(
             "confidence": s.confidence,
             "source": s.source,
             "status": s.status,
+            # Why it's acted/blocked (e.g. "no price", "position already open") — see
+            # SignalService.mark_blocked. Previously omitted here despite that method's
+            # own comment saying it'd be visible via this route.
+            "reasoning": s.reasoning,
         }
         for s in signals
     ]
