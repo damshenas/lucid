@@ -699,3 +699,33 @@ with the codebase. Newest entries at the bottom.
   (src/modules/com/trading212/__init__.py) intentionally returns the raw symbol
   unchanged when it finds no match in Trading212's instrument list, by design, so
   Trading212 rejects it with a clear error rather than the code silently failing.
+- (2026-09-10) `reconcile_pending_orders` was hammering `/api/v0/equity/orders/{id}`
+  (404 once filled) then `/api/v0/equity/history/orders` per pending order in a
+  tight loop, with no cross-order throttling. That history endpoint has its own
+  much tighter Trading212 rate limit (seen: 6 req/60s) than the general 50/60s
+  limit, so a batch of pending orders exhausted it and got a run of `429`s. The
+  retry logic in `Trading212Client.request()` used a fixed exponential backoff
+  (`0.2 * 2**attempt`) that ignored the `Retry-After` header Trading212 sends on
+  429 (e.g. 4-5s) — so all 3 retry attempts re-hit the same still-exhausted window
+  and gave up. Fixed: `_retry_delay()` now reads `Retry-After` and sleeps that long
+  instead of the short exponential backoff when present. No cross-order rate
+  limiter was added (order left as-is) — this only fixes wasted/futile retries
+  within a single request's retry loop, not overall request volume across a
+  reconcile pass.
+- (2026-09-10) Added proactive rate-limit tracking to `Trading212Client`
+  (`_rate_limit_reset`, `_bucket_key`, `_record_rate_limit`, `_wait_for_rate_limit`
+  in src/modules/com/trading212/__init__.py): every response's
+  `x-ratelimit-remaining`/`x-ratelimit-reset` headers are recorded per
+  endpoint-template bucket (numeric path segments collapsed to `{id}`, since
+  Trading212 limits e.g. `/equity/orders/{id}` as one bucket regardless of the
+  actual id — confirmed against `tmp/trading-212-api.yaml`: `orderById` is
+  `1 req/1s`, `/equity/history/orders` is `6 req/60s`, vastly tighter than the
+  general `50 req/1m0s`). Before firing a request, the client now waits out any
+  bucket it already knows is exhausted instead of firing and getting a 429.
+  Confirmed relevant per-endpoint values only exist in the API spec's per-path
+  descriptions, not the general "Rate Limiting" doc section — `Retry-After` itself
+  isn't documented there either, only seen live in response headers. This is
+  per-`Trading212Client` instance state, which is safe because `AppContext`
+  already caches one client per (user_id, asset_class, broker_name, base_url,
+  key_id, secret_key) (see context.py `_broker_cache` comment) — a fresh client
+  per call would make this tracking useless.

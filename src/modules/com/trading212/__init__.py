@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import re
+import time
 from typing import Any
 
 import httpx
@@ -77,21 +79,61 @@ class Trading212Client:
             timeout=timeout_seconds,
         )
         self._instruments_cache: list[dict[str, Any]] | None = None
+        # Per-endpoint-template rate-limit state, keyed by "METHOD /normalized/path"
+        # (numeric path segments collapsed to "{id}" — Trading212 limits e.g.
+        # /equity/orders/{id} as one bucket regardless of the actual order id).
+        # Populated from x-ratelimit-remaining/x-ratelimit-reset on every response so
+        # a known-exhausted endpoint is waited out before the next call instead of
+        # firing it and getting a 429 back.
+        self._rate_limit_reset: dict[str, float] = {}
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+    @staticmethod
+    def _bucket_key(method: str, path: str) -> str:
+        normalized = re.sub(r"/\d+(?=/|$)", "/{id}", path)
+        return f"{method.upper()} {normalized}"
+
+    def _record_rate_limit(self, method: str, path: str, response: httpx.Response) -> None:
+        remaining = response.headers.get("x-ratelimit-remaining")
+        reset = response.headers.get("x-ratelimit-reset")
+        if remaining is None or reset is None:
+            return
+        try:
+            remaining_n = int(remaining)
+            reset_ts = float(reset)
+        except ValueError:
+            return
+        key = self._bucket_key(method, path)
+        if remaining_n <= 0:
+            self._rate_limit_reset[key] = reset_ts
+        else:
+            self._rate_limit_reset.pop(key, None)
+
+    async def _wait_for_rate_limit(self, method: str, path: str) -> None:
+        reset_ts = self._rate_limit_reset.get(self._bucket_key(method, path))
+        if reset_ts is None:
+            return
+        delay = reset_ts - time.time()
+        if delay > 0:
+            await asyncio.sleep(delay)
 
     async def request(
         self, method: str, path: str, *, allow_404: bool = False, **kwargs: Any
     ) -> Any:
         last_exc: Exception | None = None
         for attempt in range(1, self._retry_attempts + 1):
+            await self._wait_for_rate_limit(method, path)
             try:
                 response = await self._client.request(method, path, **kwargs)
+                self._record_rate_limit(method, path, response)
                 if allow_404 and response.status_code == 404:
                     return None
                 if response.status_code in _RETRYABLE_STATUS:
-                    raise Trading212Error(f"retryable status {response.status_code}")
+                    exc = Trading212Error(f"retryable status {response.status_code}")
+                    exc.delay = self._retry_delay(response, attempt)
+                    raise exc
                 response.raise_for_status()
                 if response.content:
                     return response.json()
@@ -99,7 +141,10 @@ class Trading212Client:
             except (httpx.TransportError, httpx.TimeoutException, Trading212Error) as exc:
                 last_exc = exc
                 if attempt < self._retry_attempts:
-                    await asyncio.sleep(self._backoff_base * (2 ** (attempt - 1)))
+                    delay = getattr(exc, "delay", None)
+                    await asyncio.sleep(
+                        delay if delay is not None else self._backoff_base * (2 ** (attempt - 1))
+                    )
                     continue
             except httpx.HTTPStatusError as exc:
                 body = exc.response.text.strip()[:500]
@@ -108,6 +153,19 @@ class Trading212Client:
                     f"HTTP {exc.response.status_code} for {path}{detail}"
                 ) from exc
         raise Trading212Error(f"request failed after {self._retry_attempts} attempts: {last_exc}")
+
+    def _retry_delay(self, response: httpx.Response, attempt: int) -> float:
+        """Trading212 enforces separate, much tighter rate limits on some
+        endpoints (e.g. 6 req/60s on /history/orders) than the default
+        exponential backoff assumes — honor the server's ``Retry-After`` header
+        when present instead of re-hitting the same window immediately."""
+        retry_after = response.headers.get("retry-after")
+        if retry_after is not None:
+            try:
+                return max(float(retry_after), self._backoff_base)
+            except ValueError:
+                pass
+        return self._backoff_base * (2 ** (attempt - 1))
 
     async def _get_instruments(self) -> list[dict[str, Any]]:
         if self._instruments_cache is None:
