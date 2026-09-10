@@ -62,8 +62,20 @@ class TradingRuntime:
 
     # -- providers for the execution engine --------------------------------
 
-    def _quote(self, ticker: str) -> float:
-        price = storage.latest_price(self.ctx.settings.price.storage_path, ticker)
+    async def _quote(self, ticker: str) -> float:
+        storage_path = self.ctx.settings.price.storage_path
+        price = storage.latest_price(storage_path, ticker)
+        if price is not None:
+            return price
+        # Nothing stored at all yet (e.g. a signal_follow-discovered candidate that
+        # hasn't been through a scheduled fetch) — fetch it now instead of blocking
+        # this buy with "no price" until the next scheduled pipeline run.
+        try:
+            await self._pipeline().run_backfill(ticker, days=5)
+        except Exception as exc:  # noqa: BLE001 - fall through to "no price" below
+            _logger.warning("on-demand price fetch failed for %s: %s", ticker, exc)
+            return 0.0
+        price = storage.latest_price(storage_path, ticker)
         return price if price is not None else 0.0
 
     async def _config(self, user_id: int, asset_class: str | None) -> dict[str, Any]:

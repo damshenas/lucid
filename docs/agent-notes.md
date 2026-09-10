@@ -650,3 +650,31 @@ with the codebase. Newest entries at the bottom.
   decision `acted` followed by no order) with literally no way to see why from the
   UI. Fixed both: `reasoning` added to the API response, `Signal` TS type, and a new
   "Reason" column in the Signals table.
+- CHANGED (2026-09-10): `TradingRuntime._quote()` (src/api/runtime.py) is now async
+  and fetches on-demand instead of only ever reading stored bars. Previously a
+  ticker with zero stored bars stayed permanently blocked with "no price" until the
+  next scheduled daily/intraday pipeline run (up to ~24h later, and scheduled jobs
+  never run at all in sqlite/test mode — see `register_jobs()`). Now: if
+  `storage.latest_price()` is `None`, it calls `self._pipeline().run_backfill(ticker,
+  days=5)` once, then re-reads; any exception during the fetch is caught and logged,
+  falling through to the pre-existing "no price"/`0.0` block behavior. This
+  complements (doesn't replace) the earlier `_watchlist()` fix above — that fix gets
+  discovery-only tickers into the *scheduled* pipeline; this fix additionally
+  unblocks the very first evaluation before that scheduled fetch ever runs.
+- TEST-ISOLATION GOTCHA (2026-09-10): mutating `ctx.settings.price.storage_path`
+  (or any other `ctx.settings.*` field) on the shared `client` fixture's already-
+  running `AppContext` — i.e. `runtime.ctx.settings.price.storage_path =
+  str(tmp_path)` *after* `create_app()`/lifespan already started — does NOT reliably
+  isolate writes to `tmp_path` for code paths reached from background-style calls
+  (e.g. `TradingRuntime.run_strategies()` triggering `ExecutionEngine.handle_buy` →
+  the on-demand `_quote()` fetch above). A test doing this leaked a real "NFLX"
+  parquet file into the default `/data/prices` path, which then showed up as a
+  phantom ad-hoc entry (see `list_watchlist`'s "has stored bars but no watchlist
+  row" scan in src/api/v1/prices.py) in FOUR unrelated, later-running tests reading
+  the default storage path. Fix: build a fully separate `AppContext.build(...)` +
+  `create_app(ctx)` + own `TestClient` for any test that needs a custom
+  `storage_path`, and set `ctx.settings.price.storage_path` *before* `create_app()`
+  — matches the pre-existing pattern in `test_admin_price_coverage_report_reflects_
+  stored_bars`. Never mutate `ctx.settings` on the shared `client` fixture's context
+  once the app has already started, even though nothing prevents you from doing so
+  at the Python level.

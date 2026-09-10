@@ -13,6 +13,7 @@ from src.api.context import AppContext
 from src.api.main import create_app
 from src.api.runtime import TradingRuntime
 from src.modules.broker import BrokerRegistry, PaperBroker
+from src.modules.com import yahoofinance
 from src.modules.price import storage
 from src.modules.schedules import market_hours
 from src.modules.signal.sources import ExternalSignal, SignalSourceRegistry
@@ -136,13 +137,15 @@ def test_strategy_decisions_endpoint(client: TestClient) -> None:
 
 
 def test_signal_follow_discovers_candidates_without_watchlist_or_price_bars(
-    client: TestClient, monkeypatch
+    monkeypatch, tmp_path
 ) -> None:
     """signal_follow must never depend on the watchlist at all (USES_WATCHLIST =
     False) — candidate tickers come from SignalSourceRegistry.discover() across its
     declared EXTERNAL_SOURCES instead. NFLX is never added to the watchlist and has
     zero stored price bars; it must still be evaluated (and act, since two
-    independent sources agree) purely from discovery."""
+    independent sources agree) purely from discovery, and execution's on-demand
+    price fetch (TradingRuntime._quote) must let it actually place the order rather
+    than being stuck blocked with "no price" forever."""
 
     async def fake_discover(self, sources):
         return [
@@ -150,35 +153,62 @@ def test_signal_follow_discovers_candidates_without_watchlist_or_price_bars(
             ExternalSignal(source="tradingview", ticker="NFLX", direction="buy"),
         ]
 
+    async def fake_fetch_ohlcv(ticker, *, period="1y", interval="1d", **kwargs):
+        return pd.DataFrame(
+            {"open": [50.0], "high": [51.0], "low": [49.0], "close": [50.0], "volume": [1000.0]},
+            index=pd.to_datetime(["2026-01-01"]),
+        )
+
     monkeypatch.setattr(SignalSourceRegistry, "discover", fake_discover)
+    monkeypatch.setattr(yahoofinance, "fetch_ohlcv", fake_fetch_ohlcv)
     # This test's assertions don't care whether NFLX's market is currently open —
     # without this, the test's pass/fail depended on the wall-clock time it happened
     # to run at (real NYSE hours via src.modules.schedules.market_hours.is_open).
     monkeypatch.setattr(market_hours, "is_open", lambda region, now=None: True)
 
-    admin_token = client.post(
-        "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
-    ).json()["access_token"]
-    trader_token = _create_and_login_trader(client, admin_token, "trader6")
-
-    # Deliberately no watchlist entries at all.
-    assert client.get("/api/v1/prices/watchlist", headers=_auth(trader_token)).json() == []
-
-    activate = client.patch(
-        "/api/v1/strategies/signal_follow/activate?direction=buy", headers=_auth(trader_token)
+    # Own dedicated ctx/app (not the shared `client` fixture) with storage_path
+    # pointed at tmp_path *before* the app starts — a stored-bars write triggered
+    # mid-test (see TradingRuntime._quote's on-demand fetch) must never land in the
+    # real default path (/data/prices), which persists across every other test in
+    # this same pytest run and would leak "NFLX" into their watchlist listings.
+    ctx = AppContext.build(
+        database_url="sqlite+aiosqlite:///:memory:",
+        broker_registry=_mock_broker_registry(),
     )
-    assert activate.status_code == 200
+    ctx.settings.price.storage_path = str(tmp_path)
+    app = create_app(ctx)
+    with TestClient(app) as client:
+        admin_token = client.post(
+            "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
+        ).json()["access_token"]
+        trader_token = _create_and_login_trader(client, admin_token, "trader6")
 
-    # No price bars stored anywhere for NFLX either.
-    runtime: TradingRuntime = client.app.state.runtime
-    asyncio.run(runtime.run_strategies())
+        # Deliberately no watchlist entries at all.
+        assert client.get("/api/v1/prices/watchlist", headers=_auth(trader_token)).json() == []
 
-    decisions = client.get(
-        "/api/v1/strategies/signal_follow/decisions", headers=_auth(trader_token)
-    ).json()
-    assert len(decisions) == 1
-    assert decisions[0]["ticker"] == "NFLX"
-    assert decisions[0]["acted"] is True
+        activate = client.patch(
+            "/api/v1/strategies/signal_follow/activate?direction=buy", headers=_auth(trader_token)
+        )
+        assert activate.status_code == 200
+
+        # No price bars stored anywhere for NFLX either.
+        runtime: TradingRuntime = client.app.state.runtime
+        asyncio.run(runtime.run_strategies())
+
+        decisions = client.get(
+            "/api/v1/strategies/signal_follow/decisions", headers=_auth(trader_token)
+        ).json()
+        assert len(decisions) == 1
+        assert decisions[0]["ticker"] == "NFLX"
+        assert decisions[0]["acted"] is True
+
+        # The on-demand fetch inside _quote() must have unblocked execution — a
+        # signal was recorded and actually acted on, not blocked with "no price".
+        signals = client.get(
+            "/api/v1/signals?source=signal_follow", headers=_auth(trader_token)
+        ).json()
+        assert len(signals) == 1
+        assert signals[0]["status"] == "acted"
 
 
 def test_signal_sources_credential_free_always_configured(client: TestClient) -> None:
