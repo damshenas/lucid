@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from src.conf.schema import QuantityMode
@@ -47,7 +48,8 @@ def compute_buy_quantity(
     else:
         usd = fixed_usd
 
-    # Manual orders send a clean user-typed quantity; auto-sizing divides two
-    # floats and can produce ~17-significant-digit values (e.g. 2.893518518518518)
-    # that brokers reject as an invalid quantity. Round to a sane precision.
-    return round(max(0.0, usd / price), 4)
+    # Trading212 rejects most equities with "invalid quantity precision" unless the
+    # quantity is a whole number — only a subset of instruments allow fractional
+    # quantities, and the API exposes no per-instrument way to tell which. Floor to
+    # whole shares so every auto-sized buy is valid regardless of the instrument.
+    return float(math.floor(max(0.0, usd / price)))

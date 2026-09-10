@@ -682,16 +682,20 @@ with the codebase. Newest entries at the bottom.
   (OpenAPI spec) — check it before guessing at request/response schemas or error
   semantics for `src/modules/com/trading212/`.
 - (2026-09-10) Auto-sized buys were failing with `HTTP 400 for
-  /api/v0/equity/orders/market` while manual orders (exact user-typed quantity)
-  worked fine. Root cause candidate: `compute_buy_quantity()` (src/modules/
-  execution/sizing.py) did `usd / price` with no rounding, producing ~17-sig-digit
-  floats (e.g. `2.893518518518518`) sent raw as the `quantity` field — manual
-  orders never hit this because the user types a clean number. Fixed by rounding
-  to 4 decimal places. `Trading212Client.request()` also previously discarded the
-  response body on 4xx (`raise_for_status()` + generic message) — now includes the
-  response body (truncated) in the raised `Trading212Error`, so the *next*
-  occurrence of any order-placement failure will show Trading212's actual
-  validation message instead of just the status code. `tmp/trading-212-api.yaml`'s
-  `MarketRequest`/`400: Failed validation` docs don't specify a decimal precision
-  or fractional-share limit per instrument, so the exact validation rule Trading212
-  enforces is still unconfirmed — verify against the next captured error body.
+  /api/v0/equity/orders/market`. `Trading212Client.request()` used to discard the
+  response body on 4xx; fixed to include it (truncated) in the raised
+  `Trading212Error`, which then revealed the real cause: `{"type":"/api-errors/
+  quantity-precision-mismatch", ..., "detail":"invalid quantity precision 3"}`.
+  Trading212 rejects most equities unless `quantity` is a whole number — only a
+  subset of instruments allow fractional shares, and the API exposes no
+  per-instrument way to know which. `compute_buy_quantity()` (src/modules/
+  execution/sizing.py) did `usd / price` with no rounding, producing 3+ decimal
+  quantities; manual orders never hit this because the user types a clean number.
+  Fixed by flooring to a whole share count (`math.floor`) — always valid
+  regardless of what precision an instrument supports, at the cost of losing
+  sub-share sizing precision for the instruments that do allow it.
+  Separately, `HTTP 404 ... {"type":"/api-errors/entity-not-found","detail":
+  "Ticker does not exist"}` for tickers like `CRGY` is NOT a bug: `resolve_ticker`
+  (src/modules/com/trading212/__init__.py) intentionally returns the raw symbol
+  unchanged when it finds no match in Trading212's instrument list, by design, so
+  Trading212 rejects it with a clear error rather than the code silently failing.
