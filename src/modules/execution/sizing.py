@@ -47,4 +47,7 @@ def compute_buy_quantity(
     else:
         usd = fixed_usd
 
-    return max(0.0, usd / price)
+    # Manual orders send a clean user-typed quantity; auto-sizing divides two
+    # floats and can produce ~17-significant-digit values (e.g. 2.893518518518518)
+    # that brokers reject as an invalid quantity. Round to a sane precision.
+    return round(max(0.0, usd / price), 4)

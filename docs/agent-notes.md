@@ -678,3 +678,20 @@ with the codebase. Newest entries at the bottom.
   stored_bars`. Never mutate `ctx.settings` on the shared `client` fixture's context
   once the app has already started, even though nothing prevents you from doing so
   at the Python level.
+- `tmp/trading-212-api.yaml` is the official Trading212 REST API reference
+  (OpenAPI spec) — check it before guessing at request/response schemas or error
+  semantics for `src/modules/com/trading212/`.
+- (2026-09-10) Auto-sized buys were failing with `HTTP 400 for
+  /api/v0/equity/orders/market` while manual orders (exact user-typed quantity)
+  worked fine. Root cause candidate: `compute_buy_quantity()` (src/modules/
+  execution/sizing.py) did `usd / price` with no rounding, producing ~17-sig-digit
+  floats (e.g. `2.893518518518518`) sent raw as the `quantity` field — manual
+  orders never hit this because the user types a clean number. Fixed by rounding
+  to 4 decimal places. `Trading212Client.request()` also previously discarded the
+  response body on 4xx (`raise_for_status()` + generic message) — now includes the
+  response body (truncated) in the raised `Trading212Error`, so the *next*
+  occurrence of any order-placement failure will show Trading212's actual
+  validation message instead of just the status code. `tmp/trading-212-api.yaml`'s
+  `MarketRequest`/`400: Failed validation` docs don't specify a decimal precision
+  or fractional-share limit per instrument, so the exact validation rule Trading212
+  enforces is still unconfirmed — verify against the next captured error body.
