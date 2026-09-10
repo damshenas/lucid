@@ -25,6 +25,7 @@ from src.modules.bus import (
     OrderRejectedEvent,
     SellSignalEvent,
 )
+from src.modules.cache import TTLCache
 from src.modules.db.connection import Database
 from src.modules.db.models.base import OrderSide, OrderStatus, PositionStatus, SignalStatus
 from src.modules.db.repositories.order import OrderRepository
@@ -80,6 +81,19 @@ class ExecutionEngine:
         self._config = config_provider
         self._bus = bus
         self._locks: dict[tuple[int, str], asyncio.Lock] = {}
+        # Trading212's account/summary endpoint is rate-limited to 1 req/5s; several
+        # buy signals for the same user land in the same scheduler tick and would
+        # otherwise each call it back-to-back and get 403'd. 5s matches that limit.
+        self._account_summary_cache = TTLCache(default_ttl_seconds=5.0)
+
+    async def _get_account_summary(self, broker: Broker, user_id: int, asset_class: str) -> Any:
+        key = (user_id, asset_class)
+        cached = self._account_summary_cache.get(key)
+        if cached is not None:
+            return cached
+        summary = await broker.get_account_summary()
+        self._account_summary_cache.set(key, summary)
+        return summary
 
     def subscribe(self, bus: EventBus) -> None:
         self._bus = bus
@@ -139,7 +153,7 @@ class ExecutionEngine:
                         return
 
                     broker = await _maybe_await(self._resolve_broker(event.user_id, event.asset_class))
-                    summary = await broker.get_account_summary()
+                    summary = await self._get_account_summary(broker, event.user_id, event.asset_class)
                     quantity = compute_buy_quantity(
                         mode=execution_cfg.get("quantity_mode", "fixed_usd"),
                         price=price,
