@@ -36,6 +36,10 @@ class TokenOut(BaseModel):
     refresh_token: str
     token_type: str = "bearer"
     must_change_password: bool = False
+    # Whether the server currently enforces must_change_password (auth.
+    # enforce_password_policy, off by default) — lets the UI decide whether to
+    # force the change-password screen instead of blindly always forcing it.
+    password_policy_enforced: bool = False
 
 
 class RefreshIn(BaseModel):
@@ -46,12 +50,18 @@ class ChangePasswordIn(BaseModel):
     new_password: str = Field(min_length=8, max_length=72)
 
 
-def _issue_tokens(request: Request, user: User) -> TokenOut:
-    tokens = get_context(request).token_service
+async def _issue_tokens(request: Request, session: AsyncSession, user: User) -> TokenOut:
+    ctx = get_context(request)
+    tokens = ctx.token_service
+    try:
+        enforced = bool(await ctx.config_service(session).resolve("auth.enforce_password_policy"))
+    except KeyError:
+        enforced = False
     return TokenOut(
         access_token=tokens.create_access_token(str(user.id), role=user.role),
         refresh_token=tokens.create_refresh_token(str(user.id)),
         must_change_password=user.must_change_password,
+        password_policy_enforced=enforced,
     )
 
 
@@ -67,7 +77,7 @@ async def setup(request: Request, body: SetupIn, session: AsyncSession = Depends
         await session.commit()
     except FirstRunError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
-    return _issue_tokens(request, user)
+    return await _issue_tokens(request, session, user)
 
 
 @router.post("/login", response_model=TokenOut)
@@ -83,7 +93,7 @@ async def login(request: Request, body: LoginIn, session: AsyncSession = Depends
         await session.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc)) from exc
     await session.commit()
-    return _issue_tokens(request, user)
+    return await _issue_tokens(request, session, user)
 
 
 @router.post("/refresh", response_model=TokenOut)
@@ -96,7 +106,7 @@ async def refresh(request: Request, body: RefreshIn, session: AsyncSession = Dep
     user = await UserRepository(session).get_by_id(int(payload["sub"]))
     if user is None or not user.is_active:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid user")
-    return _issue_tokens(request, user)
+    return await _issue_tokens(request, session, user)
 
 
 @router.post("/change-password")

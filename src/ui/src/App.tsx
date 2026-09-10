@@ -6,6 +6,7 @@ import { useAuth } from "./hooks/useAuth";
 import { defaultPathFor } from "./lib/nav";
 import { Backtesting } from "./pages/Backtesting";
 import { Dashboard } from "./pages/Dashboard";
+import { ForcePasswordChange } from "./pages/ForcePasswordChange";
 import { Jobs } from "./pages/Jobs";
 import { Login } from "./pages/Login";
 import { ManualTrade } from "./pages/ManualTrade";
@@ -18,12 +19,21 @@ import { StrategyDetail } from "./pages/StrategyDetail";
 import { Users } from "./pages/Users";
 
 export function App() {
-  const { token, role, initialized, sessionExpired, login, setup, logout } = useAuth();
+  const { token, role, initialized, sessionExpired, mustChangePassword, login, setup, logout, passwordChanged } =
+    useAuth();
 
   if (!token) {
     return (
       <ServerStatusGate>
         <Login initialized={initialized} sessionExpired={sessionExpired} onLogin={login} onSetup={setup} />
+      </ServerStatusGate>
+    );
+  }
+
+  if (mustChangePassword) {
+    return (
+      <ServerStatusGate>
+        <ForcePasswordChange onChanged={passwordChanged} onLogout={logout} />
       </ServerStatusGate>
     );
   }

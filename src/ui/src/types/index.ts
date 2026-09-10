@@ -3,6 +3,7 @@ export interface Tokens {
   refresh_token: string;
   token_type: string;
   must_change_password: boolean;
+  password_policy_enforced: boolean;
 }
 
 export interface Position {

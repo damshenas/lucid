@@ -4,10 +4,24 @@ import { decodeAccessToken } from "../lib/jwt";
 import type { Role } from "../lib/permissions";
 import { clearSessionExpired, isSessionExpired, subscribeSessionExpiry } from "../lib/sessionExpiry";
 
+// Only known at login/setup time (must_change_password isn't a JWT claim) — persisted
+// alongside the token so it survives a page reload before the user has acted on it.
+const MUST_CHANGE_PASSWORD_KEY = "lucid_must_change_password";
+
+function getStoredMustChangePassword(): boolean {
+  return localStorage.getItem(MUST_CHANGE_PASSWORD_KEY) === "1";
+}
+
+function setStoredMustChangePassword(value: boolean): void {
+  if (value) localStorage.setItem(MUST_CHANGE_PASSWORD_KEY, "1");
+  else localStorage.removeItem(MUST_CHANGE_PASSWORD_KEY);
+}
+
 export function useAuth() {
   const [token, setTokenState] = useState<string | null>(getToken());
   const [initialized, setInitialized] = useState<boolean | null>(null);
   const [sessionExpired, setSessionExpired] = useState(false);
+  const [mustChangePassword, setMustChangePassword] = useState(getStoredMustChangePassword());
 
   useEffect(() => {
     api
@@ -45,6 +59,9 @@ export function useAuth() {
     setTokenState(tokens.access_token);
     setSessionExpired(false);
     clearSessionExpired();
+    const blocked = tokens.must_change_password && tokens.password_policy_enforced;
+    setStoredMustChangePassword(blocked);
+    setMustChangePassword(blocked);
   }, []);
 
   const setup = useCallback(async (username: string, password: string) => {
@@ -54,6 +71,9 @@ export function useAuth() {
     setInitialized(true);
     setSessionExpired(false);
     clearSessionExpired();
+    const blocked = tokens.must_change_password && tokens.password_policy_enforced;
+    setStoredMustChangePassword(blocked);
+    setMustChangePassword(blocked);
   }, []);
 
   const logout = useCallback(() => {
@@ -61,11 +81,29 @@ export function useAuth() {
     setTokenState(null);
     setSessionExpired(false);
     clearSessionExpired();
+    setStoredMustChangePassword(false);
+    setMustChangePassword(false);
+  }, []);
+
+  const passwordChanged = useCallback(() => {
+    setStoredMustChangePassword(false);
+    setMustChangePassword(false);
   }, []);
 
   const claims = useMemo(() => decodeAccessToken(token), [token]);
   const role = (claims?.role as Role | undefined) ?? null;
   const userId = claims?.sub ?? null;
 
-  return { token, role, userId, initialized, sessionExpired, login, setup, logout };
+  return {
+    token,
+    role,
+    userId,
+    initialized,
+    sessionExpired,
+    mustChangePassword,
+    login,
+    setup,
+    logout,
+    passwordChanged,
+  };
 }

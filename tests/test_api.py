@@ -581,10 +581,16 @@ def test_must_change_password_blocks_permissioned_actions_until_changed(
     """Regression test for bugs.md finding 11: must_change_password was purely
     informational — a newly created trader could place trades, edit credentials,
     etc. with the temporary password forever. Any require_permission-gated action
-    must now be rejected until the password is actually changed."""
+    must now be rejected until the password is actually changed, when
+    auth.enforce_password_policy is on (off by default)."""
     admin_token = client.post(
         "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
     ).json()["access_token"]
+    client.post(
+        "/api/v1/settings",
+        headers=_auth(admin_token),
+        json={"values": {"auth.enforce_password_policy": True}},
+    )
     client.post(
         "/api/v1/admin/users",
         headers=_auth(admin_token),
@@ -617,6 +623,30 @@ def test_must_change_password_blocks_permissioned_actions_until_changed(
     allowed = client.post(
         "/api/v1/orders/manual",
         headers=_auth(token),
+        json={"ticker": "AAPL", "side": "buy", "quantity": 1},
+    )
+    assert allowed.status_code == 201
+
+
+def test_password_policy_not_enforced_by_default(client: TestClient) -> None:
+    """auth.enforce_password_policy defaults to false — a must_change_password
+    trader must NOT be blocked unless an admin explicitly turns it on."""
+    admin_token = client.post(
+        "/api/v1/auth/setup", json={"username": "root", "password": "password123"}
+    ).json()["access_token"]
+    client.post(
+        "/api/v1/admin/users",
+        headers=_auth(admin_token),
+        json={"username": "trader14", "password": "traderpass", "role": "trader"},
+    )
+    login = client.post(
+        "/api/v1/auth/login", json={"username": "trader14", "password": "traderpass"}
+    ).json()
+    assert login["must_change_password"] is True
+
+    allowed = client.post(
+        "/api/v1/orders/manual",
+        headers=_auth(login["access_token"]),
         json={"ticker": "AAPL", "side": "buy", "quantity": 1},
     )
     assert allowed.status_code == 201

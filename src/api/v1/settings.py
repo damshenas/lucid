@@ -64,14 +64,20 @@ async def save_values(
     session: AsyncSession = Depends(get_session),
     user: User = Depends(get_current_user),
 ) -> dict[str, bool]:
+    config = get_context(request).config_service(session)
     if user.must_change_password:
         # This route checks per-key write permission itself (can_write_key) rather
         # than going through require_permission, so it needs its own
-        # must_change_password gate too (bugs.md finding 11).
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN, "password change required before this action"
-        )
-    config = get_context(request).config_service(session)
+        # must_change_password gate too (bugs.md finding 11). Gated behind
+        # auth.enforce_password_policy (default off).
+        try:
+            enforced = bool(await config.resolve("auth.enforce_password_policy"))
+        except KeyError:
+            enforced = False
+        if enforced:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, "password change required before this action"
+            )
     strategy_service = get_context(request).strategy_service(session)
     # Admins manage "system defaults" (per plan.md's RBAC table) — their writes apply
     # globally (user_id=None) so every trader/viewer picks them up, rather than only

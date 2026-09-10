@@ -47,13 +47,26 @@ async def get_current_user(
     return user
 
 
+async def _password_policy_enforced(request: Request, session: AsyncSession) -> bool:
+    ctx = get_context(request)
+    try:
+        return bool(await ctx.config_service(session).resolve("auth.enforce_password_policy"))
+    except KeyError:
+        return False
+
+
 def require_permission(permission: Permission) -> Callable[..., object]:
-    async def dependency(user: User = Depends(get_current_user)) -> User:
-        if user.must_change_password:
+    async def dependency(
+        request: Request,
+        session: AsyncSession = Depends(get_session),
+        user: User = Depends(get_current_user),
+    ) -> User:
+        if user.must_change_password and await _password_policy_enforced(request, session):
             # A temporary/reset password must be changed before any permissioned
             # action (trade, edit credentials, activate a strategy, admin actions,
             # ...) — the change-password endpoint itself depends on plain
             # get_current_user, not this, so it's unaffected (bugs.md finding 11).
+            # Gated behind auth.enforce_password_policy (default off).
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN, "password change required before this action"
             )

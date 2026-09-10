@@ -39,3 +39,6 @@ broker:
 logger:
   level: INFO
   file_path: /data/lucid.log
+
+auth:
+  enforce_password_policy: false

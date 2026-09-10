@@ -227,6 +227,7 @@ export function Settings() {
         level="nested"
         tabs={[
           { id: "logging", label: "Logging", content: schemaTab("logger") },
+          { id: "auth", label: "Password Policy", content: schemaTab("auth") },
           { id: "git-sync", label: "Git Sync", content: <GitSyncTab /> },
         ]}
       />

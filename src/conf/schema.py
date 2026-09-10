@@ -76,6 +76,13 @@ class BrokerConfig(BaseModel):
     paper_mode: bool = True
 
 
+class AuthConfig(BaseModel):
+    # When True, a must_change_password user is blocked from any permissioned
+    # action until they change it (see require_permission in api/deps.py and
+    # save_values in api/v1/settings.py). Off by default.
+    enforce_password_policy: bool = False
+
+
 class LoggerConfig(BaseModel):
     level: LogLevel = LogLevel.info
     file_path: str | None = "/data/lucid.log"
@@ -90,3 +97,4 @@ class LucidConfig(BaseModel):
     price: PriceConfig = Field(default_factory=PriceConfig)
     broker: BrokerConfig = Field(default_factory=BrokerConfig)
     logger: LoggerConfig = Field(default_factory=LoggerConfig)
+    auth: AuthConfig = Field(default_factory=AuthConfig)
