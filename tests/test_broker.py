@@ -149,3 +149,57 @@ async def test_trading212_retries_then_fails() -> None:
         await client.request("GET", "/api/v0/equity/positions")
     assert calls["n"] == 2  # retry_attempts
     await client.aclose()
+
+
+async def test_trading212_get_order_status_active() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/orders/123"):
+            return httpx.Response(200, json={"ticker": "AAPL_US_EQ", "status": "WORKING"})
+        return httpx.Response(404)
+
+    client = _mock_client(handler)
+    broker = Trading212Broker(client)
+
+    result = await broker.get_order_status("123")
+    assert result.status == "working"
+    assert result.ticker == "AAPL"
+    await client.aclose()
+
+
+async def test_trading212_get_order_status_falls_back_to_history() -> None:
+    """A filled/cancelled order drops out of /equity/orders/{id} (404) — it must be
+    found via the history endpoint instead."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/orders/123"):
+            return httpx.Response(404)
+        if request.url.path.endswith("/history/orders"):
+            return httpx.Response(
+                200,
+                json={"items": [{"id": 123, "ticker": "AAPL_US_EQ", "status": "FILLED"}]},
+            )
+        return httpx.Response(404)
+
+    client = _mock_client(handler)
+    broker = Trading212Broker(client)
+
+    result = await broker.get_order_status("123")
+    assert result.status == "filled"
+    assert result.ticker == "AAPL"
+    await client.aclose()
+
+
+async def test_trading212_get_order_status_missing_everywhere_raises() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/orders/123"):
+            return httpx.Response(404)
+        if request.url.path.endswith("/history/orders"):
+            return httpx.Response(200, json={"items": []})
+        return httpx.Response(404)
+
+    client = _mock_client(handler)
+    broker = Trading212Broker(client)
+
+    with pytest.raises(Trading212Error):
+        await broker.get_order_status("123")
+    await client.aclose()

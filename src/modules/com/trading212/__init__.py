@@ -42,6 +42,9 @@ OPTIONAL_CONFIG = {"timeout_seconds": 10.0, "retry_attempts": 3, "backoff_base":
 _SUFFIX_PRIORITY: dict[str, int] = {"_US_EQ": 0, "_US_ETF": 1}
 
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+# /equity/orders/{id} only covers active orders; once filled/cancelled it 404s and
+# the order must be looked up in history instead — cap how many pages we scan.
+_HISTORY_LOOKUP_PAGES = 5
 _logger = get_logger("com.trading212")
 
 
@@ -78,11 +81,15 @@ class Trading212Client:
     async def aclose(self) -> None:
         await self._client.aclose()
 
-    async def request(self, method: str, path: str, **kwargs: Any) -> Any:
+    async def request(
+        self, method: str, path: str, *, allow_404: bool = False, **kwargs: Any
+    ) -> Any:
         last_exc: Exception | None = None
         for attempt in range(1, self._retry_attempts + 1):
             try:
                 response = await self._client.request(method, path, **kwargs)
+                if allow_404 and response.status_code == 404:
+                    return None
                 if response.status_code in _RETRYABLE_STATUS:
                     raise Trading212Error(f"retryable status {response.status_code}")
                 response.raise_for_status()
@@ -187,7 +194,16 @@ class Trading212Broker(Broker):
             return False
 
     async def get_order_status(self, broker_order_id: str) -> OrderResult:
-        data = await self._client.request("GET", f"/api/v0/equity/orders/{broker_order_id}") or {}
+        data = await self._client.request(
+            "GET", f"/api/v0/equity/orders/{broker_order_id}", allow_404=True
+        )
+        if data is None:
+            # No longer active (filled/cancelled) — resolve the terminal state from history.
+            data = await self._find_in_history(broker_order_id)
+            if data is None:
+                raise Trading212Error(
+                    f"order {broker_order_id} not found in active orders or history"
+                )
         raw_ticker = data.get("ticker") or (data.get("instrument") or {}).get("ticker", "")
         return OrderResult(
             ticker=str(raw_ticker).split("_")[0],
@@ -197,6 +213,21 @@ class Trading212Broker(Broker):
             avg_price=data.get("fillPrice"),
             paper=self._paper,
         )
+
+    async def _find_in_history(self, broker_order_id: str) -> dict[str, Any] | None:
+        cursor: str | None = None
+        for _ in range(_HISTORY_LOOKUP_PAGES):
+            params = {"cursor": cursor} if cursor else None
+            page = await self._client.request(
+                "GET", "/api/v0/equity/history/orders", params=params
+            ) or {}
+            for item in page.get("items") or []:
+                if str(item.get("id")) == str(broker_order_id):
+                    return item
+            cursor = page.get("nextPagePath")
+            if not cursor:
+                break
+        return None
 
 
 __all__ = [
