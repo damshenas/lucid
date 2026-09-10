@@ -11,7 +11,7 @@ the app still boots (a warning is logged). Production must set them.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from src.conf.schema import LucidConfig
 from src.modules.authentication import TokenService
@@ -60,6 +60,13 @@ class AppContext:
     # an external broker_registry is injected (e.g. in tests) whose factories
     # do not require platform credentials.
     broker_credentials_required: bool = True
+    # Cached real brokers keyed by (user_id, asset_class, broker_name, base_url,
+    # key_id, secret_key) — a fresh Trading212Client per call meant a fresh httpx
+    # client/TCP+TLS connection/cookie jar every request, which made Cloudflare's
+    # bot-management treat every call as a brand-new, cookie-less session and 403
+    # it intermittently. Reusing one client per credential set keeps the
+    # connection (and any __cf_bm cookie) alive across calls.
+    _broker_cache: dict[tuple, Broker] = field(default_factory=dict, repr=False, compare=False)
 
     @property
     def is_sqlite(self) -> bool:
@@ -93,7 +100,11 @@ class AppContext:
                     "broker requires trading212 credentials"
                 ) from exc
             base_url = trading212.DEMO_BASE_URL if paper_mode else trading212.LIVE_BASE_URL
-            return self.broker_registry.resolve(
+            cache_key = (user_id, asset_class, broker_name, base_url, key_id, secret_key)
+            cached = self._broker_cache.get(cache_key)
+            if cached is not None:
+                return cached
+            broker = self.broker_registry.resolve(
                 broker_name=broker_name,
                 asset_class=asset_class,
                 paper_mode=False,
@@ -102,6 +113,8 @@ class AppContext:
                 base_url=base_url,
                 paper=paper_mode,
             )
+            self._broker_cache[cache_key] = broker
+            return broker
         return self.broker_registry.resolve(
             broker_name=broker_name,
             asset_class=asset_class,
