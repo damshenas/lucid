@@ -54,6 +54,10 @@ class ScheduleConfig(BaseModel):
     daily_price_hour: int = 22
     intraday_price_minutes: int = 15
     reconcile_orders_seconds: int = 60
+    # How often the broker's own position book is trusted to correct local drift
+    # (src/api/v1/positions.py sync_positions_from_broker) — independent of the
+    # order-reconcile job above, which only resolves orders this app itself placed.
+    sync_positions_seconds: int = 900
     # Gates intraday price-fetch jobs and strategy evaluation (run_strategies) by each
     # ticker's watchlist region (see PriceWatchlist.region,
     # src/modules/schedules/market_hours.py) — a closed-market ticker is skipped

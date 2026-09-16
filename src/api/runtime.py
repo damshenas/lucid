@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from src.conf.schema import AssetClass
 from src.modules.db.models.base import Role
 from src.modules.db.repositories.decision import StrategyDecisionRepository
 from src.modules.db.repositories.price import (
@@ -21,6 +22,7 @@ from src.modules.db.repositories.position import PositionRepository
 from src.modules.db.repositories.user import UserRepository
 from src.modules.com import yahoofinance
 from src.modules.com.git import sync_and_deploy
+from src.modules.encryption.credentials import CredentialNotConfiguredError
 from src.modules.execution import ExecutionEngine
 from src.modules.logger import get_logger
 from src.modules.price import storage
@@ -501,6 +503,32 @@ class TradingRuntime:
                 reasoning=decision.reasoning,
             )
 
+    async def sync_broker_positions(self) -> None:
+        """Periodically re-pull every active trader's positions straight from their
+        broker (per asset class) and reconcile local drift — the broker is always
+        the source of truth. See sync_positions_from_broker for what gets published
+        when it actually finds a delta. A user with no credentials configured for a
+        given asset class is skipped, not an error."""
+        from src.api.v1.positions import sync_positions_from_broker
+
+        async with self.ctx.db.session() as session:
+            users = [
+                u
+                for u in await UserRepository(session).get_all()
+                if u.role == Role.trader.value and u.is_active
+            ]
+        for user in users:
+            for asset_class in AssetClass:
+                try:
+                    async with self.ctx.db.transaction() as session:
+                        await sync_positions_from_broker(self.ctx, session, user.id, asset_class.value)
+                except CredentialNotConfiguredError:
+                    continue
+                except Exception as exc:  # noqa: BLE001 - one user/class must not block the rest
+                    _logger.warning(
+                        "broker position sync failed %s/%s: %s", user.id, asset_class.value, exc
+                    )
+
     async def _scan_strategies(self) -> None:
         async with self.ctx.db.transaction() as session:
             await self.ctx.strategy_service(session).scan()
@@ -555,6 +583,11 @@ class TradingRuntime:
             self.execution.reconcile_pending_orders,
             id="reconcile_orders",
             seconds=max(10, schedule.reconcile_orders_seconds),
+        )
+        self.scheduler.add_interval_job(
+            self.sync_broker_positions,
+            id="sync_broker_positions",
+            seconds=max(60, schedule.sync_positions_seconds),
         )
 
     # -- lifecycle ---------------------------------------------------------

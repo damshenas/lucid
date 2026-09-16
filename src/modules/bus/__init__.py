@@ -14,6 +14,7 @@ from typing import TypeVar
 from src.modules.logger import get_logger
 
 from .events import (
+    BrokerSyncEvent,
     BuySignalEvent,
     Event,
     OrderFilledEvent,
@@ -62,6 +63,7 @@ class EventBus:
 
 __all__ = [
     "BuySignalEvent",
+    "BrokerSyncEvent",
     "Event",
     "EventBus",
     "Handler",

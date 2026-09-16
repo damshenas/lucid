@@ -63,3 +63,16 @@ class PriceFetchedEvent(Event):
     interval: str
     rows: int
     asset_class: str = AssetClass.equity.value
+
+
+@dataclass(slots=True)
+class BrokerSyncEvent(Event):
+    """Published by sync_positions_from_broker only when it actually changes
+    something — lets the broker's own book of record correct local drift instead of
+    silently trusting stale local state."""
+
+    user_id: int
+    asset_class: str
+    created: list[str]
+    adjusted: list[str]
+    closed: list[str]

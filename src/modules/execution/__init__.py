@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import math
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -116,6 +118,12 @@ class ExecutionEngine:
         self._account_summary_cache.set(key, summary)
         return summary
 
+    def _debit_account_cash(self, user_id: int, asset_class: str, amount: float) -> None:
+        key = (user_id, asset_class)
+        summary = self._account_summary_cache.get(key)
+        if summary is not None:
+            self._account_summary_cache.set(key, replace(summary, cash=summary.cash - amount))
+
     def subscribe(self, bus: EventBus) -> None:
         self._bus = bus
         bus.subscribe(BuySignalEvent, self.handle_buy)
@@ -187,6 +195,11 @@ class ExecutionEngine:
                         await self._reject(event.ticker, event.user_id, "buy", "zero quantity")
                         return
 
+                    if quantity * price > summary.cash:
+                        await signal_service.mark_blocked(signal, reason="insufficient cash")
+                        await self._reject(event.ticker, event.user_id, "buy", "insufficient cash")
+                        return
+
                     result = await broker.place_market_order(
                         event.ticker, quantity, asset_class=event.asset_class
                     )
@@ -195,6 +208,12 @@ class ExecutionEngine:
                         await signal_service.mark_blocked(signal, reason=reason)
                         await self._reject(event.ticker, event.user_id, "buy", reason)
                         return
+
+                    # Broker accepted the order (whether filled yet or still pending)
+                    # -> cash is spent/reserved now. Debit the cached summary so the
+                    # next buy signal in the same batch doesn't size against stale
+                    # pre-spend cash (bugs.md finding: TTL cache never invalidated).
+                    self._debit_account_cash(event.user_id, event.asset_class, quantity * price)
 
                     if result.status != OrderStatus.filled.value:
                         # Broker accepted the order but hasn't confirmed a fill yet
@@ -303,7 +322,14 @@ class ExecutionEngine:
                     if event.quantity_pct is None:
                         quantity = position.quantity
                     else:
-                        quantity = min(position.quantity, position.quantity * event.quantity_pct / 100.0)
+                        # Floor a partial tier sell to a whole share count, same as
+                        # compute_buy_quantity — Trading212 rejects a fractional
+                        # quantity on most equities with "invalid quantity precision"
+                        # (a full exit still sends position.quantity as-is, since
+                        # that's whatever the broker actually holds for us).
+                        quantity = math.floor(
+                            min(position.quantity, position.quantity * event.quantity_pct / 100.0)
+                        )
                     if quantity <= 0:
                         await signal_service.mark_blocked(signal, reason="zero quantity")
                         await self._reject(event.ticker, event.user_id, "sell", "zero quantity")

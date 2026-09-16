@@ -465,7 +465,8 @@ async def test_concurrent_identical_tier_events_only_sell_once(db: Database) -> 
         orders = await OrderRepository(s).list_by_user(uid)
     sell_orders = [o for o in orders if o.side == "sell"]
     assert len(sell_orders) == 1
-    assert positions[0].quantity == pytest.approx(10.0 - (10.0 * 0.33))
+    # Tier sell quantity is floored to a whole share (10 * 0.33 = 3.3 -> 3 sold).
+    assert positions[0].quantity == pytest.approx(7.0)
     assert positions[0].profit_tier1_taken is True
 
 

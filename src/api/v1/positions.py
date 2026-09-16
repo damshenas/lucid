@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.conf.schema import AssetClass
+from src.modules.bus import BrokerSyncEvent
 from src.modules.db.models.base import PositionStatus
 from src.modules.db.models.user import User
 from src.modules.db.repositories.position import PositionRepository
@@ -34,16 +35,20 @@ async def sync_positions_from_broker(
 ) -> dict[str, int]:
     """Fetch a user's current broker positions and reconcile them into the local
     ``positions`` table: create/update anything the broker reports, and close any
-    locally-open position the broker no longer reports. Shared by ``POST
-    /api/v1/positions/sync`` (self-service) and the admin "reset trading data"
-    endpoint (``src/api/v1/admin.py``), which calls this right after wiping a user's
-    trade history so positions start fresh from whatever the broker actually holds."""
+    locally-open position the broker no longer reports — the broker is always the
+    source of truth. Shared by ``POST /api/v1/positions/sync`` (self-service), the
+    admin "reset trading data" endpoint (``src/api/v1/admin.py``), and the periodic
+    ``sync_broker_positions`` job (``src/api/runtime.py``). Publishes one
+    ``BrokerSyncEvent`` with whatever was created/adjusted/closed, only when this
+    call actually changed something."""
     broker = await ctx.resolve_broker(session, user_id, asset_class)
     broker_positions = await broker.get_positions()
 
     repo = PositionRepository(session)
     now = datetime.now(timezone.utc)
     seen: set[str] = set()
+    created: list[str] = []
+    adjusted: list[str] = []
     for bp in broker_positions:
         seen.add(bp.ticker)
         existing = await repo.get_open_by_ticker(user_id, bp.ticker, asset_class)
@@ -57,8 +62,13 @@ async def sync_positions_from_broker(
                 status=PositionStatus.open.value,
                 opened_at=now,
             )
-        else:
+            created.append(bp.ticker)
+        elif (
+            abs(existing.quantity - bp.quantity) > 1e-9
+            or abs(existing.avg_price - bp.avg_price) > 1e-9
+        ):
             await repo.update(existing, quantity=bp.quantity, avg_price=bp.avg_price)
+            adjusted.append(bp.ticker)
 
     # Close local open positions the broker no longer reports — scoped to this
     # asset_class only. list_open() returns a user's open positions across every
@@ -66,7 +76,7 @@ async def sync_positions_from_broker(
     # without this filter a sync of one asset class would wrongly close open
     # positions that simply belong to a *different* asset class and were never
     # queried from this broker at all.
-    closed = 0
+    closed: list[str] = []
     for local in await repo.list_open(user_id):
         if local.asset_class != asset_class:
             continue
@@ -74,9 +84,21 @@ async def sync_positions_from_broker(
             await repo.update(
                 local, quantity=0.0, status=PositionStatus.closed.value, closed_at=now
             )
-            closed += 1
+            closed.append(local.ticker)
 
-    return {"synced": len(broker_positions), "closed": closed}
+    if created or adjusted or closed:
+        await ctx.bus.publish(
+            BrokerSyncEvent(
+                user_id=user_id,
+                asset_class=asset_class,
+                created=created,
+                adjusted=adjusted,
+                closed=closed,
+            )
+        )
+
+    return {"synced": len(broker_positions), "closed": len(closed)}
+
 
 
 @router.get("")
