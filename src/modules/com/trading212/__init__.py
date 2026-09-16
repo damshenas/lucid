@@ -14,6 +14,7 @@ import base64
 import re
 import time
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 
@@ -286,7 +287,10 @@ class Trading212Broker(Broker):
             for item in page.get("items") or []:
                 if str(item.get("id")) == str(broker_order_id):
                     return item
-            cursor = page.get("nextPagePath")
+            next_path = page.get("nextPagePath")
+            if not next_path:
+                break
+            cursor = parse_qs(urlsplit(next_path).query).get("cursor", [None])[0]
             if not cursor:
                 break
         return None

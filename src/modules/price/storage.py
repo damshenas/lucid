@@ -72,7 +72,11 @@ def latest_price(
         if df is None or df.empty:
             continue
         ts = df.index.max()
-        if best_ts is None or ts > best_ts:
-            best_ts = ts
+        # Daily bars are tz-naive, intraday bars are tz-aware — normalize to UTC
+        # before comparing or this raises "Cannot compare tz-naive and tz-aware
+        # timestamps" whenever both kinds are stored for the same ticker.
+        ts_cmp = ts.tz_localize("UTC") if ts.tzinfo is None else ts.tz_convert("UTC")
+        if best_ts is None or ts_cmp > best_ts:
+            best_ts = ts_cmp
             best_close = float(df["close"].iloc[-1])
     return best_close
